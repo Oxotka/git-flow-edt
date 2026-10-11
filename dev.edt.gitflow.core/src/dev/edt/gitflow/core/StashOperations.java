@@ -1,5 +1,6 @@
 package dev.edt.gitflow.core;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collection;
@@ -8,6 +9,7 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.StashApplyFailureException;
+import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 
@@ -29,9 +31,9 @@ public final class StashOperations
     {
     }
 
-    public static boolean hasStash(Repository repository) throws GitAPIException
+    public static boolean hasStash(Repository repository) throws IOException
     {
-        return !Git.wrap(repository).stashList().call().isEmpty();
+        return repository.exactRef(Constants.R_STASH) != null;
     }
 
     public static Result quickStash(Repository repository, boolean includeUntracked, IProgressMonitor monitor)

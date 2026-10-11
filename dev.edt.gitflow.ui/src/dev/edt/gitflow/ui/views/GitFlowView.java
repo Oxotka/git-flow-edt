@@ -1354,7 +1354,7 @@ public class GitFlowView extends ViewPart
             fillChangesTree();
             updatePrimary();
         }
-        scheduleRefresh(0);
+        scheduleIndexRefresh(0, latestChanges);
     }
 
     private static WorkingChanges changesFrom(IndexDiffData data)
@@ -1389,6 +1389,16 @@ public class GitFlowView extends ViewPart
 
     private void scheduleRefresh(long delay)
     {
+        scheduleRefresh(delay, true, null);
+    }
+
+    private void scheduleIndexRefresh(long delay, WorkingChanges latestChanges)
+    {
+        scheduleRefresh(delay, false, latestChanges);
+    }
+
+    private void scheduleRefresh(long delay, boolean fullRefresh, WorkingChanges cachedChanges)
+    {
         if (refreshJob != null)
         {
             if (refreshJob.getState() == Job.RUNNING)
@@ -1417,21 +1427,32 @@ public class GitFlowView extends ViewPart
             {
                 try
                 {
-                    WorkingChanges latestChanges = displayedIndexDiff == null ? WorkingChanges.read(repository)
-                        : changesFrom(displayedIndexDiff);
+                    WorkingChanges latestChanges = cachedChanges != null ? cachedChanges
+                        : displayedIndexDiff == null ? WorkingChanges.read(repository)
+                            : changesFrom(displayedIndexDiff);
                     boolean latestHasStashedChanges = StashOperations.hasStash(repository);
-                    RepositoryOverview latestOverview = RepositoryOverview.read(repository, latestChanges,
-                        displayedOverview, displayedOverviewHead, displayedOverviewUpstream);
+                    RepositoryOverview latestOverview = fullRefresh
+                        ? RepositoryOverview.read(repository, latestChanges, displayedOverview,
+                            displayedOverviewHead, displayedOverviewUpstream) : displayedOverview;
                     RepositoryState latestState = repository.getRepositoryState();
                     String mergeMessage = latestState == RepositoryState.MERGING_RESOLVED
                         ? repository.readMergeCommitMsg() : null;
-                    ObjectId latestHead = repository.resolve(Constants.HEAD);
-                    String latestHistoryState = RecentHistory.stateKey(repository);
-                    String tracking = new BranchConfig(repository.getConfig(), repository.getBranch())
-                        .getRemoteTrackingBranch();
-                    ObjectId latestUpstream = tracking == null ? null : repository.resolve(tracking);
-                    List<RecentHistory.Entry> latestHistory = Objects.equals(latestHistoryState,
-                        displayedHistoryState) ? null : RecentHistory.read(repository, 0, HISTORY_PAGE_SIZE + 1);
+                    ObjectId latestHead = fullRefresh ? repository.resolve(Constants.HEAD) : null;
+                    String latestHistoryState = fullRefresh ? RecentHistory.stateKey(repository) : null;
+                    ObjectId latestUpstream = displayedOverviewUpstream;
+                    List<RecentHistory.Entry> latestHistory = null;
+                    if (fullRefresh)
+                    {
+                        String tracking = new BranchConfig(repository.getConfig(), repository.getBranch())
+                            .getRemoteTrackingBranch();
+                        latestUpstream = tracking == null ? null : repository.resolve(tracking);
+                        if (!Objects.equals(latestHistoryState, displayedHistoryState))
+                            latestHistory = RecentHistory.read(repository, 0, HISTORY_PAGE_SIZE + 1);
+                    }
+                    List<RecentHistory.Entry> history = latestHistory;
+                    String historyState = latestHistoryState;
+                    ObjectId head = latestHead;
+                    ObjectId upstream = latestUpstream;
                     onUi(() ->
                     {
                         if (instance == GitFlowView.this && current == generation)
@@ -1444,19 +1465,22 @@ public class GitFlowView extends ViewPart
                                 changesTree.setEnabled(true);
                             }
                             hasStashedChanges = latestHasStashedChanges;
-                            overview = latestOverview;
-                            overviewHead = latestHead;
-                            overviewUpstream = latestUpstream;
+                            if (fullRefresh)
+                            {
+                                overview = latestOverview;
+                                overviewHead = head;
+                                overviewUpstream = upstream;
+                            }
                             updateMergeMessage(latestState, mergeMessage);
                             syncStagingMessage(false);
-                            if (latestHistory != null)
+                            if (history != null)
                             {
-                                historyHead = latestHead;
-                                historyStateKey = latestHistoryState;
+                                historyHead = head;
+                                historyStateKey = historyState;
                                 historyEntries.clear();
-                                historyEntries.addAll(latestHistory.subList(0,
-                                    Math.min(HISTORY_PAGE_SIZE, latestHistory.size())));
-                                historyHasMore = latestHistory.size() > HISTORY_PAGE_SIZE;
+                                historyEntries.addAll(history.subList(0,
+                                    Math.min(HISTORY_PAGE_SIZE, history.size())));
+                                historyHasMore = history.size() > HISTORY_PAGE_SIZE;
                                 historyLoading = false;
                                 historyPane.setCommits(historyEntries, historyHasMore,
                                     GitFlowView.this::loadMoreHistory);
