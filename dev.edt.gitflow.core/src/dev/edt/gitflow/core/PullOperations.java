@@ -6,6 +6,7 @@ import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.RebaseResult;
 import org.eclipse.jgit.api.Status;
@@ -359,7 +360,7 @@ public final class PullOperations
     private static Set<String> overlappingPaths(Repository repository, ObjectId head, ObjectId upstream,
         Status localStatus) throws IOException
     {
-        ObjectId base = mergeBase(repository, head, upstream);
+        ObjectId base = findMergeBase(repository, head, upstream);
         Set<String> localPaths = changedPaths(repository, base, head);
         localPaths.addAll(workingPaths(localStatus));
         localPaths.retainAll(changedPaths(repository, base, upstream));
@@ -369,7 +370,7 @@ public final class PullOperations
     private static Set<String> overlappingWorkingPaths(Repository repository, ObjectId head, ObjectId upstream,
         Status localStatus) throws IOException
     {
-        ObjectId base = mergeBase(repository, head, upstream);
+        ObjectId base = findMergeBase(repository, head, upstream);
         Set<String> workingPaths = workingPaths(localStatus);
         workingPaths.retainAll(changedPaths(repository, base, upstream));
         return workingPaths;
@@ -388,9 +389,17 @@ public final class PullOperations
         return paths;
     }
 
-    private static ObjectId mergeBase(Repository repository, ObjectId head, ObjectId upstream) throws IOException
+    public static ObjectId findMergeBase(Repository repository, ObjectId head, ObjectId upstream) throws IOException
     {
-        if (head == null)
+        return findMergeBase(repository, head, upstream, null);
+    }
+
+    public static ObjectId findMergeBase(Repository repository, ObjectId head, ObjectId upstream,
+        IProgressMonitor monitor) throws IOException
+    {
+        if (monitor != null && monitor.isCanceled())
+            throw new OperationCanceledException();
+        if (head == null || upstream == null)
             return null;
         try (RevWalk walk = new RevWalk(repository))
         {
@@ -398,6 +407,8 @@ public final class PullOperations
             walk.markStart(walk.parseCommit(head));
             walk.markStart(walk.parseCommit(upstream));
             RevCommit base = walk.next();
+            if (monitor != null && monitor.isCanceled())
+                throw new OperationCanceledException();
             return base == null ? null : ObjectId.fromString(base.getId().name());
         }
     }

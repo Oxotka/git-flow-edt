@@ -4,12 +4,15 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.transport.URIish;
 import org.junit.Test;
 
@@ -18,6 +21,64 @@ import dev.edt.gitflow.core.PullOperations;
 
 public class PullOperationsTest
 {
+    @Test
+    public void findsMergeBaseForDivergedCommits() throws Exception
+    {
+        Path work = Files.createTempDirectory("gitflow-merge-base-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        {
+            commit(git, work, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
+            ObjectId base = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
+            git.branchCreate().setName("side").call(); //$NON-NLS-1$
+            commit(git, work, "main.txt", "main"); //$NON-NLS-1$ //$NON-NLS-2$
+            ObjectId main = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
+            git.checkout().setName("side").call(); //$NON-NLS-1$
+            commit(git, work, "side.txt", "side"); //$NON-NLS-1$ //$NON-NLS-2$
+            ObjectId side = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
+
+            assertEquals(base, PullOperations.findMergeBase(git.getRepository(), main, side));
+        }
+    }
+
+    @Test
+    public void returnsNullWhenMergeBaseHasNoCommonHistory() throws Exception
+    {
+        Path work = Files.createTempDirectory("gitflow-unrelated-merge-base-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        {
+            commit(git, work, "first.txt", "first"); //$NON-NLS-1$ //$NON-NLS-2$
+            ObjectId first = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
+            git.checkout().setOrphan(true).setName("unrelated").call(); //$NON-NLS-1$
+            commit(git, work, "second.txt", "second"); //$NON-NLS-1$ //$NON-NLS-2$
+            ObjectId second = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
+
+            assertNull(PullOperations.findMergeBase(git.getRepository(), first, second));
+        }
+    }
+
+    @Test
+    public void mergeBaseSearchStopsWhenCancelled() throws Exception
+    {
+        Path work = Files.createTempDirectory("gitflow-cancel-merge-base-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        {
+            commit(git, work, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
+            ObjectId head = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
+            NullProgressMonitor monitor = new NullProgressMonitor();
+            monitor.setCanceled(true);
+
+            try
+            {
+                PullOperations.findMergeBase(git.getRepository(), head, head, monitor);
+                fail("Ожидалась отмена поиска"); //$NON-NLS-1$
+            }
+            catch (OperationCanceledException expected)
+            {
+                assertTrue(monitor.isCanceled());
+            }
+        }
+    }
+
     @Test
     public void pullWithoutRemoteBranchKeepsWorktreeAndConfiguration() throws Exception
     {
