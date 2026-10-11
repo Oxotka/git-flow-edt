@@ -162,6 +162,7 @@ public class GitFlowView extends ViewPart
     private RecentHistoryPane historyPane;
     private ObjectId historyHead;
     private String historyStateKey;
+    private RecentHistory.Reader historyReader;
     private final List<RecentHistory.Entry> historyEntries = new ArrayList<>();
     private boolean historyHasMore;
     private boolean historyLoading;
@@ -1234,6 +1235,8 @@ public class GitFlowView extends ViewPart
         File directory = repository == null ? null : repository.getDirectory();
         if (!Objects.equals(directory, displayedDirectory))
         {
+            closeHistoryReader(historyReader);
+            historyReader = null;
             if (autoFilledMergeMessage != null
                 && messageField.getText().equals(autoFilledMergeMessage))
                 messageField.setText(""); //$NON-NLS-1$
@@ -1415,6 +1418,7 @@ public class GitFlowView extends ViewPart
             @Override
             protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
             {
+                RecentHistory.Reader createdHistoryReader = null;
                 try
                 {
                     WorkingChanges latestChanges = displayedIndexDiff == null ? WorkingChanges.read(repository)
@@ -1430,8 +1434,14 @@ public class GitFlowView extends ViewPart
                     String tracking = new BranchConfig(repository.getConfig(), repository.getBranch())
                         .getRemoteTrackingBranch();
                     ObjectId latestUpstream = tracking == null ? null : repository.resolve(tracking);
-                    List<RecentHistory.Entry> latestHistory = Objects.equals(latestHistoryState,
-                        displayedHistoryState) ? null : RecentHistory.read(repository, 0, HISTORY_PAGE_SIZE + 1);
+                    RecentHistory.Page latestHistory = null;
+                    if (!Objects.equals(latestHistoryState, displayedHistoryState))
+                    {
+                        createdHistoryReader = RecentHistory.open(repository);
+                        latestHistory = createdHistoryReader.readNext(HISTORY_PAGE_SIZE, monitor);
+                    }
+                    RecentHistory.Reader historyReaderForUi = createdHistoryReader;
+                    RecentHistory.Page historyPageForUi = latestHistory;
                     onUi(() ->
                     {
                         if (instance == GitFlowView.this && current == generation)
@@ -1449,14 +1459,15 @@ public class GitFlowView extends ViewPart
                             overviewUpstream = latestUpstream;
                             updateMergeMessage(latestState, mergeMessage);
                             syncStagingMessage(false);
-                            if (latestHistory != null)
+                            if (historyPageForUi != null)
                             {
+                                closeHistoryReader(historyReader);
+                                historyReader = historyReaderForUi;
                                 historyHead = latestHead;
                                 historyStateKey = latestHistoryState;
                                 historyEntries.clear();
-                                historyEntries.addAll(latestHistory.subList(0,
-                                    Math.min(HISTORY_PAGE_SIZE, latestHistory.size())));
-                                historyHasMore = latestHistory.size() > HISTORY_PAGE_SIZE;
+                                historyEntries.addAll(historyPageForUi.entries());
+                                historyHasMore = historyPageForUi.hasMore();
                                 historyLoading = false;
                                 historyPane.setCommits(historyEntries, historyHasMore,
                                     GitFlowView.this::loadMoreHistory);
@@ -1465,10 +1476,18 @@ public class GitFlowView extends ViewPart
                                 fillChangesTree();
                             updatePrimary();
                         }
+                        else if (historyReaderForUi != null)
+                            closeHistoryReader(historyReaderForUi);
                     });
+                }
+                catch (org.eclipse.core.runtime.OperationCanceledException e)
+                {
+                    closeHistoryReader(createdHistoryReader);
+                    return Status.CANCEL_STATUS;
                 }
                 catch (Exception e)
                 {
+                    closeHistoryReader(createdHistoryReader);
                     onUi(() ->
                     {
                         if (instance == GitFlowView.this && current == generation)
@@ -1505,11 +1524,12 @@ public class GitFlowView extends ViewPart
         Repository repository = selectedRepository();
         ObjectId expectedHead = historyHead;
         String expectedHistoryState = historyStateKey;
-        if (repository == null || expectedHead == null || historyLoading || !historyHasMore)
+        RecentHistory.Reader reader = historyReader;
+        if (repository == null || expectedHead == null || reader == null
+            || historyLoading || !historyHasMore)
             return;
         historyLoading = true;
         historyPane.setLoadingMore(true);
-        int offset = historyEntries.size();
         new Job("Загрузить следующие коммиты") //$NON-NLS-1$
         {
             @Override
@@ -1517,8 +1537,7 @@ public class GitFlowView extends ViewPart
             {
                 try
                 {
-                    List<RecentHistory.Entry> page = RecentHistory.read(repository, offset,
-                        HISTORY_PAGE_SIZE + 1);
+                    RecentHistory.Page page = reader.readNext(HISTORY_PAGE_SIZE, monitor);
                     ObjectId currentHead = repository.resolve(Constants.HEAD);
                     String currentHistoryState = RecentHistory.stateKey(repository);
                     onUi(() ->
@@ -1535,14 +1554,25 @@ public class GitFlowView extends ViewPart
                             scheduleRefresh(0);
                             return;
                         }
-                        int loaded = Math.min(HISTORY_PAGE_SIZE, page.size());
-                        List<RecentHistory.Entry> nextPage = page.subList(0, loaded);
+                        List<RecentHistory.Entry> nextPage = page.entries();
                         historyEntries.addAll(nextPage);
-                        historyHasMore = page.size() > HISTORY_PAGE_SIZE;
+                        historyHasMore = page.hasMore();
                         historyPane.appendCommits(nextPage, historyHasMore,
                             GitFlowView.this::loadMoreHistory);
                     });
                     return Status.OK_STATUS;
+                }
+                catch (org.eclipse.core.runtime.OperationCanceledException e)
+                {
+                    onUi(() ->
+                    {
+                        if (sameRepository(selectedRepository(), repository))
+                        {
+                            historyLoading = false;
+                            historyPane.setLoadingMore(false);
+                        }
+                    });
+                    return Status.CANCEL_STATUS;
                 }
                 catch (Exception e)
                 {
@@ -1559,6 +1589,23 @@ public class GitFlowView extends ViewPart
                 }
             }
         }.schedule();
+    }
+
+    private static void closeHistoryReader(RecentHistory.Reader reader)
+    {
+        if (reader == null)
+            return;
+        Job closeJob = new Job("Закрыть историю коммитов") //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
+            {
+                reader.close();
+                return Status.OK_STATUS;
+            }
+        };
+        closeJob.setSystem(true);
+        closeJob.schedule();
     }
 
     private void updateMergeMessage(RepositoryState state, String mergeMessage)
@@ -2571,6 +2618,8 @@ public class GitFlowView extends ViewPart
         indexObservedRepository = null;
         if (refreshJob != null)
             refreshJob.cancel();
+        closeHistoryReader(historyReader);
+        historyReader = null;
         if (branchImage != null && !branchImage.isDisposed())
             branchImage.dispose();
         metadataImages.values().forEach(image ->

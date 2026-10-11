@@ -6,9 +6,12 @@ import static org.junit.Assert.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.Constants;
+import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.junit.Test;
 
 import dev.edt.gitflow.core.RecentHistory;
@@ -64,6 +67,65 @@ public class RecentHistoryTest
             assertEquals("Commit 0", nextPage.get(0).subject()); //$NON-NLS-1$
             assertTrue(RecentHistory.read(git.getRepository(), 3, 2).isEmpty());
             assertTrue(RecentHistory.read(git.getRepository(), 0).isEmpty());
+        }
+    }
+
+    @Test
+    public void readsSequentialPagesWithoutRepeatingCommits() throws Exception
+    {
+        Path directory = Files.createTempDirectory("gitflow-history-pages-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                Files.writeString(directory.resolve("file.txt"), Integer.toString(i)); //$NON-NLS-1$
+                git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
+                git.commit().setMessage("Commit " + i).call(); //$NON-NLS-1$
+            }
+            try (RecentHistory.Reader reader = RecentHistory.open(git.getRepository()))
+            {
+                RecentHistory.Page first = reader.readNext(2);
+                RecentHistory.Page second = reader.readNext(2);
+                RecentHistory.Page last = reader.readNext(2);
+
+                assertEquals(List.of("Commit 4", "Commit 3"),
+                    first.entries().stream().map(RecentHistory.Entry::subject).toList()); //$NON-NLS-1$
+                assertEquals(List.of("Commit 2", "Commit 1"),
+                    second.entries().stream().map(RecentHistory.Entry::subject).toList()); //$NON-NLS-1$
+                assertEquals(List.of("Commit 0"),
+                    last.entries().stream().map(RecentHistory.Entry::subject).toList()); //$NON-NLS-1$
+                assertTrue(first.hasMore());
+                assertTrue(second.hasMore());
+                assertFalse(last.hasMore());
+            }
+        }
+    }
+
+    @Test
+    public void canceledPageReadCanBeRetried() throws Exception
+    {
+        Path directory = Files.createTempDirectory("gitflow-history-cancel-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        {
+            Files.writeString(directory.resolve("file.txt"), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+            git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
+            git.commit().setMessage("Commit").call(); //$NON-NLS-1$
+            try (RecentHistory.Reader reader = RecentHistory.open(git.getRepository()))
+            {
+                NullProgressMonitor canceled = new NullProgressMonitor();
+                canceled.setCanceled(true);
+                boolean canceledRead = false;
+                try
+                {
+                    reader.readNext(1, canceled);
+                }
+                catch (OperationCanceledException expected)
+                {
+                    canceledRead = true;
+                }
+                assertTrue(canceledRead);
+                assertEquals("Commit", reader.readNext(1).entries().get(0).subject()); //$NON-NLS-1$
+            }
         }
     }
 }

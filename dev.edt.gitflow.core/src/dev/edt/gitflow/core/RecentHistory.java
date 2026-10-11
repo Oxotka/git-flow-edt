@@ -18,9 +18,16 @@ import org.eclipse.jgit.revplot.PlotCommitList;
 import org.eclipse.jgit.revplot.PlotLane;
 import org.eclipse.jgit.revplot.PlotWalk;
 import org.eclipse.jgit.revwalk.RevSort;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.OperationCanceledException;
 
 public final class RecentHistory
 {
+    public record Page(List<Entry> entries, boolean hasMore)
+    {
+    }
+
     public record Entry(PlotCommit<PlotLane> plot, String hash, String subject,
         String message, String author, int commitTime, List<String> labels)
     {
@@ -28,6 +35,127 @@ public final class RecentHistory
 
     private RecentHistory()
     {
+    }
+
+    public static Reader open(Repository repository) throws IOException
+    {
+        return new Reader(repository);
+    }
+
+    public static final class Reader implements AutoCloseable
+    {
+        private final CancellablePlotWalk walk;
+        private final PlotCommitList<PlotLane> commits = new PlotCommitList<>();
+        private final Map<String, List<String>> labelsByCommit = new HashMap<>();
+        private int position;
+        private boolean closed;
+        private boolean exhausted;
+
+        private Reader(Repository repository) throws IOException
+        {
+            walk = new CancellablePlotWalk(repository);
+            try
+            {
+                walk.sort(RevSort.TOPO, true);
+                List<Ref> refs = importantRefs(repository);
+                walk.addAdditionalRefs(refs);
+                ObjectId head = repository.resolve(Constants.HEAD);
+                if (head != null)
+                {
+                    walk.markStart(walk.parseCommit(head));
+                    commits.source(walk);
+                }
+                for (Ref ref : refs)
+                {
+                    Ref peeled = repository.getRefDatabase().peel(ref);
+                    ObjectId id = peeled.getPeeledObjectId() == null
+                        ? peeled.getObjectId() : peeled.getPeeledObjectId();
+                    if (id != null)
+                        labelsByCommit.computeIfAbsent(id.name(), key -> new ArrayList<>())
+                            .add(Repository.shortenRefName(ref.getName()));
+                }
+                exhausted = head == null;
+            }
+            catch (IOException | RuntimeException e)
+            {
+                walk.close();
+                throw e;
+            }
+        }
+
+        public synchronized Page readNext(int limit) throws IOException
+        {
+            return readNext(limit, new NullProgressMonitor());
+        }
+
+        public synchronized Page readNext(int limit, IProgressMonitor monitor) throws IOException
+        {
+            if (closed || exhausted || limit <= 0)
+                return new Page(List.of(), false);
+            walk.setMonitor(monitor);
+            try
+            {
+                commits.fillTo(position + limit);
+                int available = commits.size() - position;
+                int count = Math.min(limit, Math.max(0, available));
+                List<Entry> page = new ArrayList<>(count);
+                for (int i = 0; i < count; i++)
+                {
+                    walk.checkCanceled();
+                    page.add(entry(commits.get(position + i), walk, labelsByCommit));
+                }
+                position += count;
+                boolean hasMore = available > limit;
+                if (!hasMore)
+                {
+                    exhausted = true;
+                    close();
+                }
+                return new Page(List.copyOf(page), hasMore);
+            }
+            finally
+            {
+                walk.setMonitor(new NullProgressMonitor());
+            }
+        }
+
+        @Override
+        public synchronized void close()
+        {
+            if (!closed)
+            {
+                closed = true;
+                walk.close();
+            }
+        }
+    }
+
+    private static final class CancellablePlotWalk extends PlotWalk
+    {
+        private IProgressMonitor monitor = new NullProgressMonitor();
+
+        CancellablePlotWalk(Repository repository)
+        {
+            super(repository);
+        }
+
+        void setMonitor(IProgressMonitor monitor)
+        {
+            this.monitor = monitor;
+        }
+
+        void checkCanceled()
+        {
+            if (monitor.isCanceled())
+                throw new OperationCanceledException();
+        }
+
+        @Override
+        public org.eclipse.jgit.revwalk.RevCommit next() throws IOException
+        {
+            checkCanceled();
+            return super.next();
+        }
     }
 
     public static List<Entry> read(Repository repository, int limit) throws IOException
@@ -63,14 +191,19 @@ public final class RecentHistory
             List<Entry> result = new ArrayList<>(Math.min(limit, Math.max(0, commits.size() - offset)));
             for (int i = offset; i < commits.size() && result.size() < limit; i++)
             {
-                PlotCommit<PlotLane> commit = commits.get(i);
-                walk.parseBody(commit);
-                result.add(new Entry(commit, commit.name(), commit.getShortMessage(),
-                    commit.getFullMessage().trim(), commit.getAuthorIdent().getName(),
-                    commit.getCommitTime(), labelsByCommit.getOrDefault(commit.name(), List.of())));
+                result.add(entry(commits.get(i), walk, labelsByCommit));
             }
             return List.copyOf(result);
         }
+    }
+
+    private static Entry entry(PlotCommit<PlotLane> commit, PlotWalk walk,
+        Map<String, List<String>> labelsByCommit) throws IOException
+    {
+        walk.parseBody(commit);
+        return new Entry(commit, commit.name(), commit.getShortMessage(),
+            commit.getFullMessage().trim(), commit.getAuthorIdent().getName(),
+            commit.getCommitTime(), labelsByCommit.getOrDefault(commit.name(), List.of()));
     }
 
     public static String stateKey(Repository repository) throws IOException
