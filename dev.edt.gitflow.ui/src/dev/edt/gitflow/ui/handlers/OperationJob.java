@@ -46,6 +46,13 @@ public final class OperationJob
         schedule(repository, shell, title, operation, confirmedOperation, completionAction, false);
     }
 
+    public static void scheduleAfterPreparation(Repository repository, Shell shell, String title,
+        BiFunction<Repository, IProgressMonitor, OperationResult> operation,
+        Consumer<OperationResult> completionAction)
+    {
+        schedule(repository, shell, title, operation, null, completionAction, false, true);
+    }
+
     public static void schedule(Repository repository, Shell shell, String title,
         BiFunction<Repository, IProgressMonitor, OperationResult> operation,
         BiFunction<Repository, IProgressMonitor, OperationResult> confirmedOperation,

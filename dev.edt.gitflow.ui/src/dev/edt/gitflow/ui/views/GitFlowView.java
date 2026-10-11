@@ -2157,9 +2157,6 @@ public class GitFlowView extends ViewPart
         }
         List<FileChange> autoStage = !mergeReady && changes.staged().isEmpty() && smartCommit
             ? List.copyOf(changes.unstaged()) : List.of();
-        if (!CommitPreparation.saveEditors(repository, getSite().getShell(),
-            changes.staged().stream().map(FileChange::path).collect(java.util.stream.Collectors.toSet())))
-            return;
         String message = messageField.getText().replace("\r\n", "\n").trim(); //$NON-NLS-1$ //$NON-NLS-2$
         boolean send = sendAfterCommit && hasRemote;
         String branch;
@@ -2174,28 +2171,40 @@ public class GitFlowView extends ViewPart
         }
         if (CommitOperations.isProtectedBranch(branch) && !confirmProtectedCommit(repository, branch, send))
             return;
-        OperationJob.schedule(repository, getSite().getShell(), Messages.get("commitAndPush"), //$NON-NLS-1$
-            (selected, monitor) ->
+        Shell shell = getSite().getShell();
+        Set<String> stagedPaths = changes.staged().stream().map(FileChange::path)
+            .collect(java.util.stream.Collectors.toSet());
+        CommitPreparation.prepareAsync(repository, shell, stagedPaths, preparation ->
+        {
+            if (!preparation.succeeded())
             {
-                if (!autoStage.isEmpty())
+                if (preparation.kind() == OperationResult.Kind.ERROR && !shell.isDisposed())
+                    MessageDialog.openError(shell, Messages.get("commitAndPush"), preparation.message()); //$NON-NLS-1$
+                return;
+            }
+            OperationJob.scheduleAfterPreparation(repository, shell, Messages.get("commitAndPush"), //$NON-NLS-1$
+                (selected, monitor) ->
                 {
-                    OperationResult preparation = WorkingChanges.stage(selected, autoStage, monitor);
-                    if (!preparation.succeeded())
-                        return preparation;
-                }
-                return CommitOperations.commitAndPush(selected, message,
-                    false, send, false, true, monitor);
-            }, null, result ->
-            {
-                if (result.commitCreated() && !messageField.isDisposed())
+                    if (!autoStage.isEmpty())
+                    {
+                        OperationResult autoStageResult = WorkingChanges.stage(selected, autoStage, monitor);
+                        if (!autoStageResult.succeeded())
+                            return autoStageResult;
+                    }
+                    return CommitOperations.commitAndPush(selected, message,
+                        false, send, false, true, monitor);
+                }, result ->
                 {
-                    autoFilledMergeMessage = null;
-                    mergeMessageEdited = false;
-                    settingMergeMessage = true;
-                    messageField.setText(""); //$NON-NLS-1$
-                    settingMergeMessage = false;
-                }
-            });
+                    if (result.commitCreated() && !messageField.isDisposed())
+                    {
+                        autoFilledMergeMessage = null;
+                        mergeMessageEdited = false;
+                        settingMergeMessage = true;
+                        messageField.setText(""); //$NON-NLS-1$
+                        settingMergeMessage = false;
+                    }
+                });
+        });
     }
 
     private boolean confirmProtectedCommit(Repository repository, String branch, boolean send)

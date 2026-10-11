@@ -159,10 +159,11 @@ final class StagingSmartPush
                     {
                         if (button.isDisposed())
                             return;
-                        button.setData(CHECKING, null);
                         if (!view.getSite().getShell().isDisposed()
                             && repository.equals(currentRepository(view)))
                             continueClicked(view, button, commit, enable, repository, stagedPaths);
+                        else
+                            button.setData(CHECKING, null);
                     });
                 }
                 catch (GitAPIException | IOException | RuntimeException e)
@@ -188,15 +189,30 @@ final class StagingSmartPush
     private static void continueClicked(ViewPart view, Button button, Method commit, Method enable,
         Repository repository, Set<String> stagedPaths)
     {
+        if (stagedPaths.isEmpty())
+        {
+            button.setData(CHECKING, null);
+            push(view, button, repository, false, false);
+            return;
+        }
+        CommitPreparation.prepareAsync(repository, view.getSite().getShell(), stagedPaths, result ->
+        {
+            if (!button.isDisposed())
+                button.setData(CHECKING, null);
+            if (result.kind() == OperationResult.Kind.ERROR && !view.getSite().getShell().isDisposed())
+                MessageDialog.openError(view.getSite().getShell(), "Git Flow", result.message()); //$NON-NLS-1$
+            if (!result.succeeded() || button.isDisposed() || view.getSite().getShell().isDisposed()
+                || !repository.equals(currentRepository(view)))
+                return;
+            commitAfterPreparation(view, button, commit, enable, repository);
+        });
+    }
+
+    private static void commitAfterPreparation(ViewPart view, Button button, Method commit, Method enable,
+        Repository repository)
+    {
         try
         {
-            if (stagedPaths.isEmpty())
-            {
-                push(view, button, repository, false, false);
-                return;
-            }
-            if (!CommitPreparation.saveEditors(repository, view.getSite().getShell(), stagedPaths))
-                return;
             ObjectId before = repository.resolve(Constants.HEAD);
             String branch = repository.getBranch();
             enable.invoke(view, false);
