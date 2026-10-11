@@ -27,6 +27,7 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.filesystem.EFS;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Platform;
@@ -51,8 +52,6 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.RepositoryState;
 import org.eclipse.jgit.api.ResetCommand.ResetType;
 import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.revwalk.RevWalk;
-import org.eclipse.jgit.revwalk.filter.RevFilter;
 import dev.edt.gitflow.core.GitLinks;
 import org.eclipse.egit.core.internal.indexdiff.IndexDiffCache;
 import org.eclipse.egit.core.internal.indexdiff.IndexDiffCacheEntry;
@@ -173,6 +172,7 @@ public class GitFlowView extends ViewPart
     private boolean movedToStaged;
     private CLabel feedbackLabel;
     private Job refreshJob;
+    private Job mergeBaseJob;
     private Repository indexObservedRepository;
     private IndexDiffCacheEntry indexDiffEntry;
     private volatile IndexDiffData indexDiffData;
@@ -1148,23 +1148,71 @@ public class GitFlowView extends ViewPart
 
     private void compareWithMergeBase(Repository repository, String selected)
     {
-        try (RevWalk walk = new RevWalk(repository))
+        if (mergeBaseJob != null)
+            mergeBaseJob.cancel();
+        int requestedGeneration = generation;
+        Job job = new Job("Поиск точки слияния") //$NON-NLS-1$
         {
-            RevCommit current = walk.parseCommit(repository.resolve(Constants.HEAD));
-            RevCommit selectedCommit = walk.parseCommit(repository.resolve(selected));
-            walk.setRevFilter(RevFilter.MERGE_BASE);
-            walk.markStart(current);
-            walk.markStart(selectedCommit);
-            RevCommit base = walk.next();
-            if (base == null)
-                showFeedback("Общая точка слияния не найдена."); //$NON-NLS-1$
-            else
-                compareCommits(repository, base.name(), selected);
-        }
-        catch (Exception e)
+            @Override
+            protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
+            {
+                monitor.beginTask("Поиск точки слияния", org.eclipse.core.runtime.IProgressMonitor.UNKNOWN); //$NON-NLS-1$
+                try
+                {
+                    if (monitor.isCanceled())
+                        return Status.CANCEL_STATUS;
+                    ObjectId head = repository.resolve(Constants.HEAD);
+                    ObjectId selectedCommit = repository.resolve(selected);
+                    ObjectId base = PullOperations.findMergeBase(repository, head, selectedCommit, monitor);
+                    if (monitor.isCanceled())
+                        return Status.CANCEL_STATUS;
+                    onUi(() ->
+                    {
+                        if (instance != GitFlowView.this || requestedGeneration != generation
+                            || !sameRepository(selectedRepository(), repository))
+                            return;
+                        if (base == null)
+                            showFeedback("Общая точка слияния не найдена."); //$NON-NLS-1$
+                        else
+                            compareCommits(repository, base.name(), selected);
+                    });
+                    return Status.OK_STATUS;
+                }
+                catch (OperationCanceledException e)
+                {
+                    return Status.CANCEL_STATUS;
+                }
+                catch (Exception e)
+                {
+                    onUi(() ->
+                    {
+                        if (instance == GitFlowView.this && requestedGeneration == generation
+                            && sameRepository(selectedRepository(), repository) && !monitor.isCanceled())
+                            showFeedback("Не удалось найти точку слияния: " + e.getMessage()); //$NON-NLS-1$
+                    });
+                    return new Status(IStatus.ERROR, PLUGIN_ID, e.getMessage(), e);
+                }
+                finally
+                {
+                    monitor.done();
+                }
+            }
+        };
+        job.addJobChangeListener(new JobChangeAdapter()
         {
-            showFeedback("Не удалось найти точку слияния: " + e.getMessage()); //$NON-NLS-1$
-        }
+            @Override
+            public void done(IJobChangeEvent event)
+            {
+                onUi(() ->
+                {
+                    if (mergeBaseJob == job)
+                        mergeBaseJob = null;
+                });
+            }
+        });
+        mergeBaseJob = job;
+        job.setUser(true);
+        job.schedule();
     }
 
     private void compareWithSelectedRef(Repository repository, String selected)
@@ -1357,7 +1405,7 @@ public class GitFlowView extends ViewPart
             fillChangesTree();
             updatePrimary();
         }
-        scheduleRefresh(0);
+        scheduleIndexRefresh(0, latestChanges);
     }
 
     private static WorkingChanges changesFrom(IndexDiffData data)
@@ -1392,6 +1440,16 @@ public class GitFlowView extends ViewPart
 
     private void scheduleRefresh(long delay)
     {
+        scheduleRefresh(delay, true, null);
+    }
+
+    private void scheduleIndexRefresh(long delay, WorkingChanges latestChanges)
+    {
+        scheduleRefresh(delay, false, latestChanges);
+    }
+
+    private void scheduleRefresh(long delay, boolean fullRefresh, WorkingChanges cachedChanges)
+    {
         if (refreshJob != null)
         {
             if (refreshJob.getState() == Job.RUNNING)
@@ -1421,27 +1479,36 @@ public class GitFlowView extends ViewPart
                 RecentHistory.Reader createdHistoryReader = null;
                 try
                 {
-                    WorkingChanges latestChanges = displayedIndexDiff == null ? WorkingChanges.read(repository)
-                        : changesFrom(displayedIndexDiff);
+                    WorkingChanges latestChanges = cachedChanges != null ? cachedChanges
+                        : displayedIndexDiff == null ? WorkingChanges.read(repository)
+                            : changesFrom(displayedIndexDiff);
                     boolean latestHasStashedChanges = StashOperations.hasStash(repository);
-                    RepositoryOverview latestOverview = RepositoryOverview.read(repository, latestChanges,
-                        displayedOverview, displayedOverviewHead, displayedOverviewUpstream);
+                    RepositoryOverview latestOverview = fullRefresh
+                        ? RepositoryOverview.read(repository, latestChanges, displayedOverview,
+                            displayedOverviewHead, displayedOverviewUpstream) : displayedOverview;
                     RepositoryState latestState = repository.getRepositoryState();
                     String mergeMessage = latestState == RepositoryState.MERGING_RESOLVED
                         ? repository.readMergeCommitMsg() : null;
-                    ObjectId latestHead = repository.resolve(Constants.HEAD);
-                    String latestHistoryState = RecentHistory.stateKey(repository);
-                    String tracking = new BranchConfig(repository.getConfig(), repository.getBranch())
-                        .getRemoteTrackingBranch();
-                    ObjectId latestUpstream = tracking == null ? null : repository.resolve(tracking);
+                    ObjectId latestHead = fullRefresh ? repository.resolve(Constants.HEAD) : null;
+                    String latestHistoryState = fullRefresh ? RecentHistory.stateKey(repository) : null;
+                    ObjectId latestUpstream = displayedOverviewUpstream;
                     RecentHistory.Page latestHistory = null;
-                    if (!Objects.equals(latestHistoryState, displayedHistoryState))
+                    if (fullRefresh)
                     {
-                        createdHistoryReader = RecentHistory.open(repository);
-                        latestHistory = createdHistoryReader.readNext(HISTORY_PAGE_SIZE, monitor);
+                        String tracking = new BranchConfig(repository.getConfig(), repository.getBranch())
+                            .getRemoteTrackingBranch();
+                        latestUpstream = tracking == null ? null : repository.resolve(tracking);
+                        if (!Objects.equals(latestHistoryState, displayedHistoryState))
+                        {
+                            createdHistoryReader = RecentHistory.open(repository);
+                            latestHistory = createdHistoryReader.readNext(HISTORY_PAGE_SIZE, monitor);
+                        }
                     }
                     RecentHistory.Reader historyReaderForUi = createdHistoryReader;
-                    RecentHistory.Page historyPageForUi = latestHistory;
+                    RecentHistory.Page history = latestHistory;
+                    String historyState = latestHistoryState;
+                    ObjectId head = latestHead;
+                    ObjectId upstream = latestUpstream;
                     onUi(() ->
                     {
                         if (instance == GitFlowView.this && current == generation)
@@ -1454,20 +1521,23 @@ public class GitFlowView extends ViewPart
                                 changesTree.setEnabled(true);
                             }
                             hasStashedChanges = latestHasStashedChanges;
-                            overview = latestOverview;
-                            overviewHead = latestHead;
-                            overviewUpstream = latestUpstream;
+                            if (fullRefresh)
+                            {
+                                overview = latestOverview;
+                                overviewHead = head;
+                                overviewUpstream = upstream;
+                            }
                             updateMergeMessage(latestState, mergeMessage);
                             syncStagingMessage(false);
-                            if (historyPageForUi != null)
+                            if (history != null)
                             {
                                 closeHistoryReader(historyReader);
                                 historyReader = historyReaderForUi;
-                                historyHead = latestHead;
-                                historyStateKey = latestHistoryState;
+                                historyHead = head;
+                                historyStateKey = historyState;
                                 historyEntries.clear();
-                                historyEntries.addAll(historyPageForUi.entries());
-                                historyHasMore = historyPageForUi.hasMore();
+                                historyEntries.addAll(history.entries());
+                                historyHasMore = history.hasMore();
                                 historyLoading = false;
                                 historyPane.setCommits(historyEntries, historyHasMore,
                                     GitFlowView.this::loadMoreHistory);
@@ -2618,6 +2688,8 @@ public class GitFlowView extends ViewPart
         indexObservedRepository = null;
         if (refreshJob != null)
             refreshJob.cancel();
+        if (mergeBaseJob != null)
+            mergeBaseJob.cancel();
         closeHistoryReader(historyReader);
         historyReader = null;
         if (branchImage != null && !branchImage.isDisposed())
