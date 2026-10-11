@@ -20,6 +20,7 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
 import dev.edt.gitflow.core.OperationResult;
+import dev.edt.gitflow.core.OperationScheduleGuard;
 import dev.edt.gitflow.ui.views.GitFlowView;
 
 public final class OperationJob
@@ -42,7 +43,26 @@ public final class OperationJob
         BiFunction<Repository, IProgressMonitor, OperationResult> confirmedOperation,
         Consumer<OperationResult> completionAction)
     {
-        if (GitFlowView.isRunning(repository))
+        schedule(repository, shell, title, operation, confirmedOperation, completionAction, false);
+    }
+
+    public static void schedule(Repository repository, Shell shell, String title,
+        BiFunction<Repository, IProgressMonitor, OperationResult> operation,
+        BiFunction<Repository, IProgressMonitor, OperationResult> confirmedOperation,
+        Consumer<OperationResult> completionAction, boolean keepChangesEnabled)
+    {
+        schedule(repository, shell, title, operation, confirmedOperation, completionAction,
+            keepChangesEnabled, false);
+    }
+
+    private static void schedule(Repository repository, Shell shell, String title,
+        BiFunction<Repository, IProgressMonitor, OperationResult> operation,
+        BiFunction<Repository, IProgressMonitor, OperationResult> confirmedOperation,
+        Consumer<OperationResult> completionAction, boolean keepChangesEnabled,
+        boolean allowPendingIndexChanges)
+    {
+        if (OperationScheduleGuard.shouldBlockSchedule(GitFlowView.isRunning(repository),
+            !keepChangesEnabled && GitFlowView.isIndexChangePending(repository), allowPendingIndexChanges))
         {
             GitFlowView.publish(Messages.get("operationAlreadyRunning")); //$NON-NLS-1$
             return;
@@ -119,7 +139,7 @@ public final class OperationJob
                         : OperationResult.Kind.ERROR, cancelled ? Messages.get("operationCancelledShort")
                             : changeEvent.getResult().getMessage()); //$NON-NLS-1$
                 }
-                GitFlowView.finished(repository);
+                GitFlowView.finished(repository, keepChangesEnabled);
                 if (completion[0] != null)
                     Display.getDefault().asyncExec(() ->
                     {
@@ -130,7 +150,7 @@ public final class OperationJob
                                 UIText.BranchResultDialog_CheckoutConflictsTitle, shell);
                             if (retry)
                                 schedule(repository, shell, title, operation, confirmedOperation,
-                                    completionAction);
+                                    completionAction, keepChangesEnabled, true);
                             return;
                         }
                         if (completion[0].kind() == OperationResult.Kind.NEEDS_CONFIRMATION
@@ -139,7 +159,7 @@ public final class OperationJob
                             if (shell != null && !shell.isDisposed()
                                 && MessageDialog.openQuestion(shell, title, completion[0].message()))
                                 schedule(repository, shell, title, confirmedOperation, null,
-                                    completionAction);
+                                    completionAction, keepChangesEnabled, true);
                             else
                                 GitFlowView.publishStatus(title + Messages.get("operationCancelled"),
                                     Messages.get("operationCancelledShort")); //$NON-NLS-1$
@@ -166,7 +186,7 @@ public final class OperationJob
                     });
             }
         });
-        GitFlowView.started(repository);
+        GitFlowView.started(repository, keepChangesEnabled);
         GitFlowView.useRepository(repository);
         GitFlowView.publishStatus(title + Messages.get("operationStarted"), phase(title)); //$NON-NLS-1$
         job.schedule();

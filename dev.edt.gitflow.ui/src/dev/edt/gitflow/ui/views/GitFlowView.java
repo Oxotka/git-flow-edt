@@ -550,14 +550,15 @@ public class GitFlowView extends ViewPart
                 return;
             TreeItem item = tree.getSelection()[0];
             Repository repository = selectedRepository();
-            boolean busy = repository == null || isRunning(repository);
+            boolean mutationBusy = repositoryMutationBusy(repository);
+            boolean canQueue = canQueueIndexChange(repository);
             if (item.getData() instanceof Boolean staged)
             {
                 boolean added = false;
                 if (!staged && canDiscardGroup(false))
                 {
                     menuItem(menu, Messages.get("discardAllChanges"), this::discardUnstagedChanges) //$NON-NLS-1$
-                        .setEnabled(!busy);
+                        .setEnabled(!mutationBusy);
                     added = true;
                 }
                 if (item.getItemCount() > 0)
@@ -565,7 +566,7 @@ public class GitFlowView extends ViewPart
                     if (added)
                         new MenuItem(menu, SWT.SEPARATOR);
                     menuItem(menu, Messages.get(staged ? "unstageAll" : "stageAll"), //$NON-NLS-1$ //$NON-NLS-2$
-                        () -> changeAll(staged)).setEnabled(!busy);
+                        () -> changeAll(staged)).setEnabled(canQueue);
                     added = true;
                 }
                 if (hasChanges())
@@ -573,14 +574,14 @@ public class GitFlowView extends ViewPart
                     if (added)
                         new MenuItem(menu, SWT.SEPARATOR);
                     menuItem(menu, Messages.get("hideAllChanges"), this::hideChanges) //$NON-NLS-1$
-                        .setEnabled(!busy);
+                        .setEnabled(!mutationBusy);
                 }
                 else if (hasStashedChanges)
                 {
                     if (added)
                         new MenuItem(menu, SWT.SEPARATOR);
                     menuItem(menu, Messages.get("restoreLastStash"), this::restoreLastStash) //$NON-NLS-1$
-                        .setEnabled(!busy);
+                        .setEnabled(!mutationBusy);
                 }
             }
             else if (item.getData() instanceof FileChange change)
@@ -608,20 +609,20 @@ public class GitFlowView extends ViewPart
                 if (!staged && canDiscard(item))
                 {
                     menuItem(menu, Messages.get("discardChanges"), //$NON-NLS-1$
-                        () -> discardFile(change)).setEnabled(!busy);
+                        () -> discardFile(change)).setEnabled(!mutationBusy);
                     added = true;
                 }
                 else if (!staged && canDeleteUntracked(item))
                 {
                     menuItem(menu, Messages.get("deleteNewFile"), //$NON-NLS-1$
-                        () -> deleteUntrackedFile(change)).setEnabled(!busy);
+                        () -> deleteUntrackedFile(change)).setEnabled(!mutationBusy);
                     added = true;
                 }
                 menuItem(menu, Messages.get(staged ? "unstageFile" : "stageFile"), //$NON-NLS-1$ //$NON-NLS-2$
-                    () -> changeFile(change.path(), staged)).setEnabled(!busy);
+                    () -> changeFile(change.path(), staged)).setEnabled(canQueue);
                 new MenuItem(menu, SWT.SEPARATOR);
                 menuItem(menu, Messages.get("hideAllChanges"), this::hideChanges) //$NON-NLS-1$
-                    .setEnabled(!busy);
+                    .setEnabled(!mutationBusy);
             }
         });
         return tree;
@@ -1595,81 +1596,126 @@ public class GitFlowView extends ViewPart
     {
         String selectedPath = movedPath;
         boolean selectedStaged = movedToStaged;
-        if (selectedPath == null && changesTree.getSelectionCount() > 0)
+        boolean showMoved = movedPath != null;
+        TreeItem selectedItem = changesTree.getSelectionCount() > 0 ? changesTree.getSelection()[0] : null;
+        TreeItem topItem = changesTree.getTopItem();
+        String topPath = topItem != null && topItem.getData() instanceof FileChange file
+            ? file.path() : null;
+        if (selectedPath == null && selectedItem != null)
         {
-            TreeItem selected = changesTree.getSelection()[0];
-            if (selected.getData() instanceof FileChange file)
+            if (selectedItem.getData() instanceof FileChange file)
             {
                 selectedPath = file.path();
-                selectedStaged = Boolean.TRUE.equals(selected.getParentItem().getData());
+                selectedStaged = Boolean.TRUE.equals(selectedItem.getParentItem().getData());
             }
         }
         TreeItem moved = null;
         changesTree.setRedraw(false);
         try
         {
-            changesTree.removeAll();
-            TreeItem staged = smartCommit && changes.staged().isEmpty() ? null
-                : fillGroup(changes.staged(), true, stagedExpanded, selectedPath, selectedStaged);
-            TreeItem unstaged = fillGroup(changes.unstaged(), false, unstagedExpanded,
-                selectedPath, selectedStaged);
-            moved = selectedStaged ? staged : unstaged;
-            if (moved == null && selectedPath != null)
-                for (TreeItem group : changesTree.getItems())
-                    for (TreeItem item : group.getItems())
-                        if (item.getData() instanceof FileChange file
-                            && file.path().equals(selectedPath))
-                            moved = item;
+            if (smartCommit && changes.staged().isEmpty())
+            {
+                TreeItem oldStaged = changeGroup(true);
+                if (oldStaged != null)
+                    oldStaged.dispose();
+            }
+            else
+                updateGroup(changes.staged(), true, stagedExpanded);
+            updateGroup(changes.unstaged(), false, unstagedExpanded);
+            if (selectedPath != null)
+            {
+                moved = changeItem(selectedPath, selectedStaged);
+                if (moved == null)
+                    moved = changeItem(selectedPath, null);
+            }
+            if (moved != null && moved != selectedItem)
+                changesTree.setSelection(moved);
+            TreeItem restoredTop = topItem != null && !topItem.isDisposed() ? topItem
+                : topPath == null ? null : changeItem(topPath, null);
+            if (restoredTop != null && changesTree.getTopItem() != restoredTop)
+                changesTree.setTopItem(restoredTop);
             movedPath = null;
         }
         finally
         {
             changesTree.setRedraw(true);
         }
-        if (moved != null)
-        {
-            changesTree.setSelection(moved);
+        if (showMoved && moved != null)
             changesTree.showItem(moved);
-        }
         if (HISTORY.length() == 0)
             showFeedback(changes.staged().isEmpty() && changes.unstaged().isEmpty()
                 ? Messages.get("ready") : ""); //$NON-NLS-1$ //$NON-NLS-2$
-        container.layout(true, true);
     }
 
-    private TreeItem fillGroup(List<FileChange> files, boolean staged, boolean expanded,
-        String selectedPath, boolean selectedStaged)
+    private TreeItem changeGroup(boolean staged)
     {
-        TreeItem moved = null;
-        TreeItem group = new TreeItem(changesTree, SWT.NONE);
-        group.setText(new String[] {
+        for (TreeItem item : changesTree.getItems())
+            if (Boolean.valueOf(staged).equals(item.getData()))
+                return item;
+        return null;
+    }
+
+    private TreeItem changeItem(String path, Boolean staged)
+    {
+        for (TreeItem group : changesTree.getItems())
+            if (staged == null || staged.equals(group.getData()))
+                for (TreeItem item : group.getItems())
+                    if (item.getData() instanceof FileChange file && file.path().equals(path))
+                        return item;
+        return null;
+    }
+
+    private void updateGroup(List<FileChange> files, boolean staged, boolean expanded)
+    {
+        TreeItem group = changeGroup(staged);
+        boolean wasEmpty = group == null || group.getItemCount() == 0;
+        if (group == null)
+        {
+            group = new TreeItem(changesTree, SWT.NONE, staged ? 0 : changesTree.getItemCount());
+            group.setData(staged);
+        }
+        String[] groupText = {
             Messages.get(staged ? "stagedChanges" : "unstagedChanges") + " · " + files.size(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             !staged && canDiscardGroup(false) ? "↶" : "", //$NON-NLS-1$
-            files.isEmpty() ? "" : staged ? "−" : "+"}); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        group.setData(staged);
-        for (FileChange change : files)
+            files.isEmpty() ? "" : staged ? "−" : "+"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (!group.getText(0).equals(groupText[0]) || !group.getText(1).equals(groupText[1])
+            || !group.getText(2).equals(groupText[2]))
+            group.setText(groupText);
+        Set<String> paths = new HashSet<>();
+        for (FileChange file : files)
+            paths.add(file.path());
+        for (TreeItem item : group.getItems())
+            if (item.getData() instanceof FileChange file && !paths.contains(file.path()))
+                item.dispose();
+        for (int index = 0; index < files.size(); index++)
         {
-            TreeItem item = new TreeItem(group, SWT.NONE);
-            ChangeDisplay display = displayChangePath(change.path());
-            // The first column is owner-drawn below; leaving its native text populated
-            // makes SWT paint the same label a second time on some platforms.
-            item.setText(new String[] {"",
-                !staged && "U".equals(change.state()) ? "×" //$NON-NLS-1$
-                    : !staged && canDiscard(change) ? "↶" : "", staged ? "−" : "+"}); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            item.setData("display", display); //$NON-NLS-1$
-            item.setData(change);
-            if (staged == selectedStaged && change.path().equals(selectedPath))
-                moved = item;
+            FileChange change = files.get(index);
+            TreeItem item = index < group.getItemCount() ? group.getItem(index) : null;
+            if (item == null || !(item.getData() instanceof FileChange existing)
+                || !existing.path().equals(change.path()))
+            {
+                item = new TreeItem(group, SWT.NONE, index);
+                item.setData("display", displayChangePath(change.path())); //$NON-NLS-1$
+            }
+            if (!change.equals(item.getData()))
+            {
+                item.setData(change);
+                // The first column is owner-drawn below; leaving its native text populated
+                // makes SWT paint the same label a second time on some platforms.
+                item.setText(new String[] {"",
+                    !staged && "U".equals(change.state()) ? "×" //$NON-NLS-1$
+                        : !staged && canDiscard(change) ? "↶" : "", staged ? "−" : "+"}); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
         }
-        group.setExpanded(expanded);
-        return moved;
+        if (wasEmpty && !files.isEmpty())
+            group.setExpanded(expanded);
     }
 
     private record ChangeDisplay(String text, String icon)
     {
     }
 
-    private record PendingIndexChange(Repository repository, FileChange file, boolean staged)
+    private record PendingIndexChange(Repository repository, List<FileChange> files, boolean staged)
     {
     }
 
@@ -1933,7 +1979,8 @@ public class GitFlowView extends ViewPart
     private void updatePrimary()
     {
         Repository repository = selectedRepository();
-        boolean busy = repository == null || isRunning(repository) || hasPendingIndexChanges(repository);
+        boolean busy = repository == null || isRunning(repository) || changesAwaitingRefresh
+            || hasPendingIndexChanges(repository);
         boolean hasChanges = !changes.staged().isEmpty() || !changes.unstaged().isEmpty();
         boolean mergeReady = repositoryState == RepositoryState.MERGING_RESOLVED;
         boolean hasRemoteChanges = overview.incoming() > 0 || overview.outgoing() > 0;
@@ -1995,7 +2042,8 @@ public class GitFlowView extends ViewPart
             && repositoryState != RepositoryState.MERGING_RESOLVED)
             return;
         Repository repository = selectedRepository();
-        boolean busy = repository == null || isRunning(repository) || hasPendingIndexChanges(repository);
+        boolean busy = repository == null || isRunning(repository) || changesAwaitingRefresh
+            || hasPendingIndexChanges(repository);
         boolean enabled = !busy && !messageField.getText().isBlank()
             && (repositoryState == RepositoryState.MERGING_RESOLVED
                 || repositoryState == RepositoryState.SAFE
@@ -2040,9 +2088,15 @@ public class GitFlowView extends ViewPart
     private void runFetch()
     {
         Repository repository = selectedRepository();
-        if (repository != null)
+        if (!repositoryMutationBusy(repository))
             OperationJob.schedule(repository, getSite().getShell(), Messages.get("fetchJob"),
                 PullOperations::fetch, null); //$NON-NLS-1$
+    }
+
+    private boolean repositoryMutationBusy(Repository repository)
+    {
+        return repository == null || isRunning(repository) || changesAwaitingRefresh
+            || hasPendingIndexChanges(repository);
     }
 
     private boolean confirmDiscard(String title, String question, String action)
@@ -2054,7 +2108,7 @@ public class GitFlowView extends ViewPart
     private void discardUnstagedChanges()
     {
         Repository repository = selectedRepository();
-        if (repository == null || isRunning(repository) || !canDiscardUnstagedChanges())
+        if (repositoryMutationBusy(repository) || !canDiscardUnstagedChanges())
             return;
         int count = discardableUnstagedCount();
         String question = count == 1
@@ -2069,14 +2123,22 @@ public class GitFlowView extends ViewPart
             ? Messages.get("discardFileAction") //$NON-NLS-1$
             : Messages.get("discardAllAction").replace("{0}", Integer.toString(count)))) //$NON-NLS-1$ //$NON-NLS-2$
             return;
+        Set<String> paths = changes.unstaged().stream()
+            .filter(change -> !"C".equals(change.state())).map(FileChange::path) //$NON-NLS-1$
+            .collect(java.util.stream.Collectors.toSet());
+        changes = new WorkingChanges(changes.staged(), changes.unstaged().stream()
+            .filter(change -> !paths.contains(change.path())).toList());
+        fillChangesTree();
+        updatePrimary();
         OperationJob.schedule(repository, getSite().getShell(), Messages.get("discardAllChanges"), //$NON-NLS-1$
-            (selected, monitor) -> WorkingChanges.discardUnstagedChanges(selected), null);
+            (selected, monitor) -> WorkingChanges.discardUnstagedChanges(selected), null, null, true);
     }
 
     private void runPrimary()
     {
         Repository repository = selectedRepository();
-        if (repository == null || isRunning(repository) || hasPendingIndexChanges(repository))
+        if (repository == null || isRunning(repository) || changesAwaitingRefresh
+            || hasPendingIndexChanges(repository))
             return;
         boolean mergeReady = repositoryState == RepositoryState.MERGING_RESOLVED;
         if (!mergeReady && changes.staged().isEmpty() && changes.unstaged().isEmpty())
@@ -2167,7 +2229,7 @@ public class GitFlowView extends ViewPart
     private void runSync()
     {
         Repository repository = selectedRepository();
-        if (repository != null)
+        if (!repositoryMutationBusy(repository))
             OperationJob.schedule(repository, getSite().getShell(), Messages.get("syncChanges"), //$NON-NLS-1$
                 PullOperations::smartPush,
                 (selected, monitor) -> PullOperations.smartPush(selected, true, monitor));
@@ -2176,7 +2238,7 @@ public class GitFlowView extends ViewPart
     private void runPull()
     {
         Repository repository = selectedRepository();
-        if (repository != null)
+        if (!repositoryMutationBusy(repository))
             OperationJob.schedule(repository, getSite().getShell(), Messages.get("pullJob"), //$NON-NLS-1$
                 PullOperations::smartPull,
                 (selected, monitor) -> PullOperations.smartPull(selected, true, monitor));
@@ -2185,7 +2247,7 @@ public class GitFlowView extends ViewPart
     private void changeFile(String path, boolean staged)
     {
         Repository repository = selectedRepository();
-        if (repository != null)
+        if (canQueueIndexChange(repository))
         {
             FileChange file = (staged ? changes.staged() : changes.unstaged()).stream()
                 .filter(change -> change.path().equals(path)).findFirst().orElse(null);
@@ -2197,7 +2259,7 @@ public class GitFlowView extends ViewPart
                 unstagedExpanded = true;
             else
                 stagedExpanded = true;
-            queuedIndexChanges.addLast(new PendingIndexChange(repository, file, staged));
+            queuedIndexChanges.addLast(new PendingIndexChange(repository, List.of(file), staged));
             optimisticMove(List.of(file), staged);
             runNextIndexChange();
         }
@@ -2212,15 +2274,18 @@ public class GitFlowView extends ViewPart
             return;
         indexChangeRunning = true;
         OperationJob.schedule(pending.repository(), getSite().getShell(),
-            Messages.get(pending.staged() ? "unstageFile" : "stageFile"), //$NON-NLS-1$ //$NON-NLS-2$
-            (selected, monitor) -> pending.staged() ? WorkingChanges.unstage(selected, pending.file().path())
-                : WorkingChanges.stage(selected, List.of(pending.file())), null, result ->
+            Messages.get(pending.files().size() > 1
+                ? pending.staged() ? "unstageAll" : "stageAll" //$NON-NLS-1$ //$NON-NLS-2$
+                : pending.staged() ? "unstageFile" : "stageFile"), //$NON-NLS-1$ //$NON-NLS-2$
+            (selected, monitor) -> pending.staged()
+                ? WorkingChanges.unstage(selected, pending.files().stream().map(FileChange::path).toList())
+                : WorkingChanges.stage(selected, pending.files()), null, result ->
                 {
                     queuedIndexChanges.removeFirstOccurrence(pending);
                     indexChangeRunning = false;
                     runNextIndexChange();
                     updatePrimary();
-                });
+                }, true);
     }
 
     private boolean hasPendingIndexChanges(Repository repository)
@@ -2228,10 +2293,20 @@ public class GitFlowView extends ViewPart
         return queuedIndexChanges.stream().anyMatch(change -> sameRepository(change.repository(), repository));
     }
 
+    private boolean canQueueIndexChange(Repository repository)
+    {
+        if (repository == null)
+            return false;
+        if (!isRunning(repository))
+            return true;
+        PendingIndexChange active = queuedIndexChanges.peekFirst();
+        return indexChangeRunning && active != null && sameRepository(active.repository(), repository);
+    }
+
     private void discardFile(FileChange file)
     {
         Repository repository = selectedRepository();
-        if (repository == null || isRunning(repository))
+        if (repositoryMutationBusy(repository))
             return;
         String question = Messages.get("discardConfirm").replace("{0}", displayChangePath(file.path()).text()); //$NON-NLS-1$ //$NON-NLS-2$
         if (!confirmDiscard(Messages.get("discardChanges"), question, Messages.get("discardFileAction"))) //$NON-NLS-1$ //$NON-NLS-2$
@@ -2250,7 +2325,7 @@ public class GitFlowView extends ViewPart
     private void deleteUntrackedFile(FileChange file)
     {
         Repository repository = selectedRepository();
-        if (repository == null || isRunning(repository))
+        if (repositoryMutationBusy(repository))
             return;
         String question = Messages.get("deleteNewFileConfirm").replace("{0}", displayChangePath(file.path()).text()) + "\n\n" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + Messages.get("deleteNewFileWarning"); //$NON-NLS-1$
@@ -2311,7 +2386,7 @@ public class GitFlowView extends ViewPart
     private void hideChanges()
     {
         Repository repository = selectedRepository();
-        if (repository == null || isRunning(repository))
+        if (repositoryMutationBusy(repository))
             return;
         OperationJob.schedule(repository, getSite().getShell(), Messages.get("hideAllChanges"), //$NON-NLS-1$
             (selected, monitor) ->
@@ -2334,7 +2409,7 @@ public class GitFlowView extends ViewPart
     private void restoreLastStash()
     {
         Repository repository = selectedRepository();
-        if (repository == null || isRunning(repository))
+        if (repositoryMutationBusy(repository))
             return;
         OperationJob.schedule(repository, getSite().getShell(), Messages.get("restoreLastStash"), //$NON-NLS-1$
             (selected, monitor) ->
@@ -2363,7 +2438,7 @@ public class GitFlowView extends ViewPart
     private void changeAll(boolean staged)
     {
         Repository repository = selectedRepository();
-        if (repository == null || isRunning(repository))
+        if (!canQueueIndexChange(repository))
             return;
         List<FileChange> files = List.copyOf(staged ? changes.staged() : changes.unstaged());
         if (files.isEmpty())
@@ -2373,11 +2448,9 @@ public class GitFlowView extends ViewPart
             unstagedExpanded = true;
         else
             stagedExpanded = true;
+        queuedIndexChanges.addLast(new PendingIndexChange(repository, files, staged));
         optimisticMove(files, staged);
-        OperationJob.schedule(repository, getSite().getShell(),
-            Messages.get(staged ? "unstageAll" : "stageAll"), //$NON-NLS-1$ //$NON-NLS-2$
-            (selected, monitor) -> staged ? WorkingChanges.unstage(selected,
-                files.stream().map(FileChange::path).toList()) : WorkingChanges.stage(selected, files), null);
+        runNextIndexChange();
     }
 
     private void optimisticMove(List<FileChange> files, boolean staged)
@@ -2528,6 +2601,11 @@ public class GitFlowView extends ViewPart
 
     public static void started(Repository repository)
     {
+        started(repository, false);
+    }
+
+    public static void started(Repository repository, boolean keepChangesEnabled)
+    {
         onUi(() ->
         {
             RUNNING.merge(repository.getDirectory(), 1, Integer::sum);
@@ -2539,8 +2617,11 @@ public class GitFlowView extends ViewPart
                 if (sameRepository(instance.selectedRepository(), repository))
                 {
                     ++instance.indexDiffEpoch;
-                    instance.changesAwaitingRefresh = true;
-                    instance.changesTree.setEnabled(false);
+                    if (!keepChangesEnabled)
+                    {
+                        instance.changesAwaitingRefresh = true;
+                        instance.changesTree.setEnabled(false);
+                    }
                 }
                 instance.updatePrimary();
             }
@@ -2552,7 +2633,19 @@ public class GitFlowView extends ViewPart
         return RUNNING.containsKey(repository.getDirectory());
     }
 
+    public static boolean isIndexChangePending(Repository repository)
+    {
+        return instance != null && (instance.hasPendingIndexChanges(repository)
+            || sameRepository(instance.selectedRepository(), repository)
+                && instance.changesAwaitingRefresh);
+    }
+
     public static void finished(Repository repository)
+    {
+        finished(repository, false);
+    }
+
+    public static void finished(Repository repository, boolean keepChangesEnabled)
     {
         onUi(() ->
         {
@@ -2560,14 +2653,28 @@ public class GitFlowView extends ViewPart
                 (key, count) -> count == 1 ? null : count - 1);
             if (instance != null)
             {
+                boolean refreshRepository = true;
                 if (sameRepository(instance.selectedRepository(), repository))
                 {
                     ++instance.indexDiffEpoch;
                     instance.indexDiffData = null;
-                    instance.changesAwaitingRefresh = true;
-                    instance.changesTree.setEnabled(false);
+                    boolean queuedNextIndexChange = keepChangesEnabled
+                        && (instance.indexChangeRunning ? instance.queuedIndexChanges.size() > 1
+                            : !instance.queuedIndexChanges.isEmpty());
+                    if (queuedNextIndexChange)
+                    {
+                        instance.updatePrimary();
+                        refreshRepository = false;
+                    }
+                    else
+                    {
+                        instance.changesAwaitingRefresh = true;
+                        if (!keepChangesEnabled)
+                            instance.changesTree.setEnabled(false);
+                    }
                 }
-                instance.updateRepository();
+                if (refreshRepository)
+                    instance.updateRepository();
                 instance.runNextIndexChange();
             }
         });
