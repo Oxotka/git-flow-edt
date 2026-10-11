@@ -175,6 +175,8 @@ public class GitFlowView extends ViewPart
     private Repository indexObservedRepository;
     private IndexDiffCacheEntry indexDiffEntry;
     private volatile IndexDiffData indexDiffData;
+    private volatile int indexDiffEpoch;
+    private boolean changesAwaitingRefresh;
     private final IndexDiffChangedListener indexDiffListener = this::indexDiffChanged;
     private boolean refreshAgain;
     private boolean messageSplitInitialized;
@@ -1238,6 +1240,8 @@ public class GitFlowView extends ViewPart
             mergeMessageEdited = false;
             repositoryState = RepositoryState.SAFE;
             displayedDirectory = directory;
+            changesAwaitingRefresh = repository != null && isRunning(repository);
+            changesTree.setEnabled(!changesAwaitingRefresh);
             overview = new RepositoryOverview(0, -1, -1);
             overviewHead = null;
             overviewUpstream = null;
@@ -1320,17 +1324,24 @@ public class GitFlowView extends ViewPart
     {
         if (!sameRepository(indexObservedRepository, repository))
             return;
-        indexDiffData = data;
+        int eventEpoch = indexDiffEpoch;
         onUi(() ->
         {
-            if (instance == GitFlowView.this && sameRepository(selectedRepository(), repository))
+            if (instance == GitFlowView.this && eventEpoch == indexDiffEpoch
+                && sameRepository(selectedRepository(), repository))
+            {
+                if (isRunning(repository) || changesAwaitingRefresh)
+                    return;
+                indexDiffData = data;
                 applyIndexDiff(repository, data);
+            }
         });
     }
 
     private void applyIndexDiff(Repository repository, IndexDiffData data)
     {
-        if (!sameRepository(selectedRepository(), repository))
+        if (!sameRepository(selectedRepository(), repository) || isRunning(repository)
+            || changesAwaitingRefresh)
             return;
         WorkingChanges latestChanges = changesFrom(data);
         if (!changes.equals(latestChanges))
@@ -1396,7 +1407,8 @@ public class GitFlowView extends ViewPart
         ObjectId displayedOverviewHead = overviewHead;
         ObjectId displayedOverviewUpstream = overviewUpstream;
         RepositoryOverview displayedOverview = overview;
-        IndexDiffData displayedIndexDiff = sameRepository(indexObservedRepository, repository) ? indexDiffData : null;
+        IndexDiffData displayedIndexDiff = !changesAwaitingRefresh
+            && sameRepository(indexObservedRepository, repository) ? indexDiffData : null;
         refreshJob = new Job(Messages.get("statusReading")) //$NON-NLS-1$
         {
             @Override
@@ -1425,6 +1437,11 @@ public class GitFlowView extends ViewPart
                         {
                             boolean changesUpdated = !changes.equals(latestChanges);
                             changes = latestChanges;
+                            if (changesAwaitingRefresh)
+                            {
+                                changesAwaitingRefresh = false;
+                                changesTree.setEnabled(true);
+                            }
                             hasStashedChanges = latestHasStashedChanges;
                             overview = latestOverview;
                             overviewHead = latestHead;
@@ -2487,6 +2504,12 @@ public class GitFlowView extends ViewPart
                 ++instance.generation;
                 if (instance.refreshJob != null)
                     instance.refreshJob.cancel();
+                if (sameRepository(instance.selectedRepository(), repository))
+                {
+                    ++instance.indexDiffEpoch;
+                    instance.changesAwaitingRefresh = true;
+                    instance.changesTree.setEnabled(false);
+                }
                 instance.updatePrimary();
             }
         });
@@ -2505,6 +2528,13 @@ public class GitFlowView extends ViewPart
                 (key, count) -> count == 1 ? null : count - 1);
             if (instance != null)
             {
+                if (sameRepository(instance.selectedRepository(), repository))
+                {
+                    ++instance.indexDiffEpoch;
+                    instance.indexDiffData = null;
+                    instance.changesAwaitingRefresh = true;
+                    instance.changesTree.setEnabled(false);
+                }
                 instance.updateRepository();
                 instance.runNextIndexChange();
             }
