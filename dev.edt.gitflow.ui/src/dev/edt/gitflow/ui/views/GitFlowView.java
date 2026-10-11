@@ -302,7 +302,7 @@ public class GitFlowView extends ViewPart
         {
             if (!settingMergeMessage && repositoryState == RepositoryState.MERGING_RESOLVED)
                 mergeMessageEdited = true;
-            updatePrimary();
+            updateCommitAvailability();
             syncStagingMessage(true);
         });
         messageField.addListener(SWT.KeyDown, event ->
@@ -1937,39 +1937,71 @@ public class GitFlowView extends ViewPart
         boolean hasChanges = !changes.staged().isEmpty() || !changes.unstaged().isEmpty();
         boolean mergeReady = repositoryState == RepositoryState.MERGING_RESOLVED;
         boolean hasRemoteChanges = overview.incoming() > 0 || overview.outgoing() > 0;
-        primaryButton.setToolTipText(null);
-        primaryButton.setText(sendAfterCommit && hasRemote ? Messages.get("commitAndPush") //$NON-NLS-1$
-            : Messages.get("commitOnly")); //$NON-NLS-1$
+        String primaryTooltip = null;
+        String primaryText = sendAfterCommit && hasRemote ? Messages.get("commitAndPush") //$NON-NLS-1$
+            : Messages.get("commitOnly"); //$NON-NLS-1$
+        boolean primaryEnabled;
         if (hasChanges || mergeReady)
         {
-            primaryButton.setEnabled(!busy && !messageField.getText().isBlank()
+            primaryEnabled = !busy && !messageField.getText().isBlank()
                 && (mergeReady || repositoryState == RepositoryState.SAFE
-                    && (!changes.staged().isEmpty() || smartCommit && !changes.unstaged().isEmpty())));
+                    && (!changes.staged().isEmpty() || smartCommit && !changes.unstaged().isEmpty()));
         }
         else
         {
             if (canPublishBranch(repository))
             {
-                primaryButton.setText(Messages.get("publishBranch")); //$NON-NLS-1$
-                primaryButton.setToolTipText(Messages.get("publishBranchHint")); //$NON-NLS-1$
-                primaryButton.setEnabled(!busy && repositoryState == RepositoryState.SAFE);
+                primaryText = Messages.get("publishBranch"); //$NON-NLS-1$
+                primaryTooltip = Messages.get("publishBranchHint"); //$NON-NLS-1$
+                primaryEnabled = !busy && repositoryState == RepositoryState.SAFE;
             }
             else if (hasRemoteChanges)
             {
-                primaryButton.setText(Messages.get("syncChanges") + " " + syncCountsText()); //$NON-NLS-1$
-                primaryButton.setToolTipText(syncTooltip());
-                primaryButton.setEnabled(repository != null && hasRemote && !busy
-                    && repositoryState == RepositoryState.SAFE);
+                primaryText = Messages.get("syncChanges") + " " + syncCountsText(); //$NON-NLS-1$
+                primaryTooltip = syncTooltip();
+                primaryEnabled = repository != null && hasRemote && !busy
+                    && repositoryState == RepositoryState.SAFE;
             }
             else
-                primaryButton.setEnabled(false);
+                primaryEnabled = false;
         }
-        syncButton.setText(syncButtonText());
-        syncButton.setToolTipText(syncTooltip());
+        boolean layoutNeeded = !primaryButton.getText().equals(primaryText);
+        if (layoutNeeded)
+            primaryButton.setText(primaryText);
+        if (!Objects.equals(primaryButton.getToolTipText(), primaryTooltip))
+            primaryButton.setToolTipText(primaryTooltip);
+        if (primaryButton.getEnabled() != primaryEnabled)
+            primaryButton.setEnabled(primaryEnabled);
+        String syncText = syncButtonText();
+        if (!syncButton.getText().equals(syncText))
+        {
+            syncButton.setText(syncText);
+            layoutNeeded = true;
+        }
+        String syncHint = syncTooltip();
+        if (!Objects.equals(syncButton.getToolTipText(), syncHint))
+            syncButton.setToolTipText(syncHint);
         boolean canSync = repository != null && hasRemote && !busy
             && repositoryState == RepositoryState.SAFE;
-        syncButton.setEnabled(canSync);
-        container.layout(true, true);
+        if (syncButton.getEnabled() != canSync)
+            syncButton.setEnabled(canSync);
+        if (layoutNeeded)
+            container.layout(true, true);
+    }
+
+    private void updateCommitAvailability()
+    {
+        if (changes.staged().isEmpty() && changes.unstaged().isEmpty()
+            && repositoryState != RepositoryState.MERGING_RESOLVED)
+            return;
+        Repository repository = selectedRepository();
+        boolean busy = repository == null || isRunning(repository) || hasPendingIndexChanges(repository);
+        boolean enabled = !busy && !messageField.getText().isBlank()
+            && (repositoryState == RepositoryState.MERGING_RESOLVED
+                || repositoryState == RepositoryState.SAFE
+                    && (!changes.staged().isEmpty() || smartCommit && !changes.unstaged().isEmpty()));
+        if (primaryButton.getEnabled() != enabled)
+            primaryButton.setEnabled(enabled);
     }
 
     private String syncTooltip()
