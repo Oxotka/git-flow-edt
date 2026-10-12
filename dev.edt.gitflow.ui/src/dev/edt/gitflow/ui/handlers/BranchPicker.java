@@ -6,9 +6,11 @@ import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -49,6 +51,7 @@ import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 import org.osgi.service.prefs.BackingStoreException;
 import org.osgi.service.prefs.Preferences;
+import dev.edt.gitflow.core.BranchPickerIndex;
 
 final class BranchPicker
 {
@@ -77,6 +80,7 @@ final class BranchPicker
     private final Font smallFont;
     private final List<Choice> branches = new ArrayList<>();
     private final Set<String> favorites = new LinkedHashSet<>();
+    private final List<Choice> favoriteChoices = new ArrayList<>();
     private final Set<String> pinnedFolders = new LinkedHashSet<>();
     private final Preferences preferences;
     private final Consumer<Choice> onSelect;
@@ -84,6 +88,9 @@ final class BranchPicker
     private final String currentBranch;
     private final boolean includeTags;
     private Choice selected;
+    private final BranchPickerIndex branchIndex = new BranchPickerIndex();
+    private final Map<String, Choice> choicesByRef = new HashMap<>();
+    private Runnable pendingSearchRebuild;
     private boolean localLoading = true;
     private boolean remoteLoading;
     private boolean tagsLoading;
@@ -115,6 +122,7 @@ final class BranchPicker
         String savedFolders = preferences.get("folders", ""); //$NON-NLS-1$ //$NON-NLS-2$
         if (!savedFolders.isEmpty())
             pinnedFolders.addAll(List.of(savedFolders.split("\n"))); //$NON-NLS-1$
+        branchIndex.setPinnedFolders(pinnedFolders);
         panel = new Composite(parent, SWT.NONE);
         panel.setLayout(new GridLayout(2, false));
         GridData panelData = new GridData(SWT.FILL, SWT.FILL, true, true);
@@ -196,8 +204,8 @@ final class BranchPicker
                 gc.setForeground(originalColor);
             }
         });
-        search.addModifyListener(event -> rebuild());
         Display display = tree.getDisplay();
+        search.addModifyListener(event -> scheduleSearchRebuild(display));
         Listener quickSearch = event ->
         {
             Control focus = display.getFocusControl();
@@ -212,11 +220,17 @@ final class BranchPicker
             }
         };
         display.addFilter(SWT.KeyDown, quickSearch);
-        panel.addListener(SWT.Dispose, event -> display.removeFilter(SWT.KeyDown, quickSearch));
+        panel.addListener(SWT.Dispose, event ->
+        {
+            display.removeFilter(SWT.KeyDown, quickSearch);
+            if (pendingSearchRebuild != null)
+                display.timerExec(-1, pendingSearchRebuild);
+        });
         search.addListener(SWT.KeyDown, event ->
         {
             if (event.keyCode == SWT.ARROW_DOWN)
             {
+                rebuildNow();
                 TreeItem first = firstLeaf();
                 if (first != null)
                 {
@@ -230,6 +244,7 @@ final class BranchPicker
         {
             if (!search.getText().isBlank())
             {
+                rebuildNow();
                 TreeItem first = firstLeaf();
                 if (first != null)
                 {
@@ -378,6 +393,13 @@ final class BranchPicker
             if (panel.isDisposed())
                 return;
             branches.addAll(choices);
+            choices.stream().filter(choice -> favorites.contains(choice.ref())).forEach(favoriteChoices::add);
+            List<BranchPickerIndex.Ref> indexed = choices.stream().map(choice -> new BranchPickerIndex.Ref(
+                choice.name(), choice.ref(), choice.kind() == Kind.TAG ? BranchPickerIndex.Group.TAG
+                    : choice.remote() ? BranchPickerIndex.Group.REMOTE : BranchPickerIndex.Group.LOCAL,
+                choice.lastActivity())).toList();
+            choices.forEach(choice -> choicesByRef.put(choice.ref(), choice));
+            branchIndex.addAll(indexed);
             update.run();
             rebuild();
         });
@@ -455,6 +477,7 @@ final class BranchPicker
                 Messages.get("favoriteSaveFailed") + " " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
+        refreshFavoriteChoices();
         rebuild();
     }
 
@@ -479,6 +502,7 @@ final class BranchPicker
                 Messages.get("folderSaveFailed") + " " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
+        branchIndex.setPinnedFolders(pinnedFolders);
         rebuild();
     }
 
@@ -490,6 +514,11 @@ final class BranchPicker
 
     private void rebuild()
     {
+        if (pendingSearchRebuild != null)
+        {
+            tree.getDisplay().timerExec(-1, pendingSearchRebuild);
+            pendingSearchRebuild = null;
+        }
         tree.setRedraw(false);
         try
         {
@@ -500,31 +529,20 @@ final class BranchPicker
             TreeItem local = root(Messages.get("localBranches")); //$NON-NLS-1$
             TreeItem remote = root(Messages.get("remoteBranches")); //$NON-NLS-1$
             TreeItem tags = includeTags ? root(Messages.get("tags")) : null; //$NON-NLS-1$
-            List<Choice> localBranches = new ArrayList<>();
-            List<Choice> remoteBranches = new ArrayList<>();
-            List<Choice> tagRefs = new ArrayList<>();
-            for (Choice branch : branches)
+            for (Choice branch : favoriteChoices)
             {
-                if (favorites.contains(branch.ref()))
-                {
-                    TreeItem item = new TreeItem(starred, SWT.NONE);
-                    item.setText(rowText("★ " + branch.name(), branch)); //$NON-NLS-1$
-                    setBranchImage(item, branch);
-                    item.setData(branch);
-                    item.setData("label", "★ " + branch.name()); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                if (branch.name().toLowerCase(Locale.ROOT).contains(query))
-                {
-                    if (branch.kind() == Kind.TAG)
-                        tagRefs.add(branch);
-                    else
-                        (branch.remote() ? remoteBranches : localBranches).add(branch);
-                }
+                TreeItem item = new TreeItem(starred, SWT.NONE);
+                item.setText(rowText("★ " + branch.name(), branch)); //$NON-NLS-1$
+                setBranchImage(item, branch);
+                item.setData(branch);
+                item.setData("label", "★ " + branch.name()); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            addGroupedBranches(local, localBranches);
-            addRemoteBranches(remote, remoteBranches);
+            addGroupedBranches(local, choices(branchIndex.filter(BranchPickerIndex.Group.LOCAL, query)),
+                BranchPickerIndex.Group.LOCAL);
+            addRemoteBranches(remote, query);
             if (includeTags)
-                addGroupedBranches(tags, tagRefs);
+                addGroupedBranches(tags, choices(branchIndex.filter(BranchPickerIndex.Group.TAG, query)),
+                    BranchPickerIndex.Group.TAG);
             if (localLoadError != null)
             {
                 TreeItem status = new TreeItem(local, SWT.NONE);
@@ -577,6 +595,43 @@ final class BranchPicker
         }
     }
 
+    private List<Choice> choices(List<BranchPickerIndex.Ref> refs)
+    {
+        return refs.stream().map(ref -> choicesByRef.get(ref.ref())).filter(choice -> choice != null).toList();
+    }
+
+    private void refreshFavoriteChoices()
+    {
+        favoriteChoices.clear();
+        for (Choice branch : branches)
+            if (favorites.contains(branch.ref()))
+                favoriteChoices.add(branch);
+    }
+
+    private void scheduleSearchRebuild(Display display)
+    {
+        if (pendingSearchRebuild != null)
+            display.timerExec(-1, pendingSearchRebuild);
+        Runnable rebuildSearch = () ->
+        {
+            pendingSearchRebuild = null;
+            if (!panel.isDisposed())
+                rebuild();
+        };
+        pendingSearchRebuild = rebuildSearch;
+        display.timerExec(100, rebuildSearch);
+    }
+
+    private void rebuildNow()
+    {
+        if (pendingSearchRebuild != null)
+        {
+            tree.getDisplay().timerExec(-1, pendingSearchRebuild);
+            pendingSearchRebuild = null;
+            rebuild();
+        }
+    }
+
     private static void expandGroups(TreeItem item)
     {
         for (TreeItem child : item.getItems())
@@ -593,39 +648,36 @@ final class BranchPicker
         return item;
     }
 
-    private void addGrouped(TreeItem root, Choice branch)
+    private void addGrouped(TreeItem root, Choice branch, List<String> parts, String prefix,
+        Map<String, TreeItem> folders)
     {
-        addGrouped(root, branch, branch.name(), ""); //$NON-NLS-1$
-    }
-
-    private void addGrouped(TreeItem root, Choice branch, String name, String prefix)
-    {
-        String[] parts = name.split("/"); //$NON-NLS-1$
         TreeItem parent = root;
         String path = prefix;
-        for (int i = 0; i < parts.length; i++)
+        for (int i = 0; i < parts.size(); i++)
         {
-            path = path.isEmpty() ? parts[i] : path + "/" + parts[i]; //$NON-NLS-1$
-            TreeItem item = i < parts.length - 1 ? findFolder(parent, path) : null;
+            String part = parts.get(i);
+            path = path.isEmpty() ? part : path + "/" + part; //$NON-NLS-1$
+            TreeItem item = i < parts.size() - 1 ? folders.get(path) : null;
             if (item == null)
             {
                 item = new TreeItem(parent, SWT.NONE);
-                if (i < parts.length - 1)
+                if (i < parts.size() - 1)
                 {
-                    item.setText(pinnedFolders.contains(path) ? "★ " + parts[i] : parts[i]); //$NON-NLS-1$
+                    item.setText(pinnedFolders.contains(path) ? "★ " + part : part); //$NON-NLS-1$
                     item.setImage(PlatformUI.getWorkbench().getSharedImages()
                         .getImage(ISharedImages.IMG_OBJ_FOLDER));
                     item.setData(new Folder(path, branch.remote()));
+                    folders.put(path, item);
                 }
                 else
                 {
-                    String label = favorites.contains(branch.ref()) ? "★ " + parts[i] : parts[i]; //$NON-NLS-1$
+                    String label = favorites.contains(branch.ref()) ? "★ " + part : part; //$NON-NLS-1$
                     item.setText(rowText(label, branch));
                     setBranchImage(item, branch);
                     item.setData("label", label); //$NON-NLS-1$
                 }
             }
-            if (i == parts.length - 1)
+            if (i == parts.size() - 1)
             {
                 item.setData(branch);
             }
@@ -637,84 +689,47 @@ final class BranchPicker
         }
     }
 
-    private void addGroupedBranches(TreeItem root, List<Choice> choices)
+    private void addGroupedBranches(TreeItem root, List<Choice> choices, BranchPickerIndex.Group group)
     {
-        Set<String> folderPaths = new LinkedHashSet<>();
+        Map<String, TreeItem> folderItems = new HashMap<>();
+        for (String path : branchIndex.folderPaths(group, search.getText(), null))
+            addFolderPath(root, branchIndex.folderParts(path), "", false, folderItems); //$NON-NLS-1$
         for (Choice choice : choices)
-        {
-            String[] parts = choice.name().split("/"); //$NON-NLS-1$
-            String path = ""; //$NON-NLS-1$
-            for (int i = 0; i < parts.length - 1; i++)
-            {
-                path = path.isEmpty() ? parts[i] : path + "/" + parts[i]; //$NON-NLS-1$
-                folderPaths.add(path);
-            }
-        }
-        List<String> folders = new ArrayList<>(folderPaths);
-        folders.sort(folderOrder(false));
-        for (String folder : folders)
-            addFolderPath(root, folder, "", false); //$NON-NLS-1$
-        choices.sort(byActivity());
-        for (Choice choice : choices)
-            addGrouped(root, choice);
+            addGrouped(root, choice, branchIndex.pathParts(choice.ref()), "", folderItems); //$NON-NLS-1$
     }
 
-    private void addRemoteBranches(TreeItem root, List<Choice> choices)
+    private void addRemoteBranches(TreeItem root, String query)
     {
-        List<String> remotes = choices.stream().map(choice -> choice.name().substring(0, choice.name().indexOf('/')))
-            .distinct().sorted(Comparator.comparing((String name) -> !name.equals("origin")) //$NON-NLS-1$
-                .thenComparing(Comparator.naturalOrder())).toList();
-        for (String remoteName : remotes)
+        for (String remoteName : branchIndex.remoteNames(query))
         {
-            TreeItem remoteRoot = findFolder(root, remoteName);
-            if (remoteRoot == null)
+            List<Choice> remoteChoices = choices(branchIndex.filterRemote(query, remoteName));
+            Map<String, TreeItem> folderItems = new HashMap<>();
+            TreeItem remoteRoot = new TreeItem(root, SWT.NONE);
+            remoteRoot.setText(pinnedFolders.contains(remoteName) ? "★ " + remoteName : remoteName); //$NON-NLS-1$
+            remoteRoot.setImage(PlatformUI.getWorkbench().getSharedImages()
+                .getImage(ISharedImages.IMG_OBJ_FOLDER));
+            remoteRoot.setData(new Folder(remoteName, true));
+            folderItems.put(remoteName, remoteRoot);
+            for (String path : branchIndex.folderPaths(BranchPickerIndex.Group.REMOTE, query, remoteName))
             {
-                remoteRoot = new TreeItem(root, SWT.NONE);
-                remoteRoot.setText(pinnedFolders.contains(remoteName) ? "★ " + remoteName : remoteName); //$NON-NLS-1$
-                remoteRoot.setImage(PlatformUI.getWorkbench().getSharedImages()
-                    .getImage(ISharedImages.IMG_OBJ_FOLDER));
-                remoteRoot.setData(new Folder(remoteName, true));
+                List<String> parts = branchIndex.folderParts(path);
+                addFolderPath(remoteRoot, parts.subList(1, parts.size()), remoteName, true, folderItems);
             }
-            List<Choice> remoteChoices = choices.stream()
-                .filter(choice -> choice.name().startsWith(remoteName + "/")) //$NON-NLS-1$
-                .sorted(byActivity()).toList();
-            Set<String> folderPaths = new LinkedHashSet<>();
             for (Choice choice : remoteChoices)
-            {
-                String[] parts = choice.name().substring(remoteName.length() + 1).split("/"); //$NON-NLS-1$
-                String path = ""; //$NON-NLS-1$
-                for (int i = 0; i < parts.length - 1; i++)
-                {
-                    path = path.isEmpty() ? parts[i] : path + "/" + parts[i]; //$NON-NLS-1$
-                    String fullPath = remoteName + "/" + path; //$NON-NLS-1$
-                    folderPaths.add(fullPath);
-                }
-            }
-            List<String> folders = new ArrayList<>(folderPaths);
-            folders.sort(folderOrder(true));
-            for (String folder : folders)
-                addFolderPath(remoteRoot, folder.substring(remoteName.length() + 1), remoteName, true);
-            for (Choice choice : remoteChoices)
-                addGrouped(remoteRoot, choice, choice.name().substring(remoteName.length() + 1), remoteName);
+                addGrouped(remoteRoot, choice, branchIndex.pathParts(choice.ref()), remoteName, folderItems);
             remoteRoot.setExpanded(true);
         }
     }
 
-    private Comparator<String> folderOrder(boolean remote)
-    {
-        return Comparator.comparingInt(BranchPicker::pathDepth)
-            .thenComparing(path -> remote && pinnedFolders.contains(path) ? 0 : 1)
-            .thenComparing(Comparator.naturalOrder());
-    }
-
-    private void addFolderPath(TreeItem root, String relativePath, String prefix, boolean remote)
+    private void addFolderPath(TreeItem root, List<String> parts, String prefix, boolean remote,
+        Map<String, TreeItem> folders)
     {
         String path = prefix;
         TreeItem parent = root;
-        for (String part : relativePath.split("/")) //$NON-NLS-1$
+        for (String part : parts)
         {
             path = path.isEmpty() ? part : path + "/" + part; //$NON-NLS-1$
-            TreeItem folder = findFolder(parent, path);
+            TreeItem folder = folders.get(path);
             if (folder == null)
             {
                 folder = new TreeItem(parent, SWT.NONE);
@@ -722,28 +737,16 @@ final class BranchPicker
                 folder.setImage(PlatformUI.getWorkbench().getSharedImages()
                     .getImage(ISharedImages.IMG_OBJ_FOLDER));
                 folder.setData(new Folder(path, remote));
+                folders.put(path, folder);
             }
             folder.setExpanded(true);
             parent = folder;
         }
     }
 
-    private static int pathDepth(String path)
-    {
-        return (int) path.chars().filter(character -> character == '/').count();
-    }
-
     private static Comparator<Choice> byActivity()
     {
         return Comparator.comparingInt(Choice::lastActivity).reversed().thenComparing(Choice::name);
-    }
-
-    private static TreeItem findFolder(TreeItem parent, String path)
-    {
-        for (TreeItem child : parent.getItems())
-            if (child.getData() instanceof Folder folder && folder.path().equals(path))
-                return child;
-        return null;
     }
 
     private static Choice choice(RevWalk walk, String name, Ref ref, boolean remote, boolean localExists, Kind kind)
