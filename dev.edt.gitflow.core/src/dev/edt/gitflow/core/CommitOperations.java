@@ -77,7 +77,7 @@ public final class CommitOperations
             if (monitor.isCanceled())
                 return new OperationResult(Kind.CANCELLED, "Коммит отменен."); //$NON-NLS-1$
             monitor.subTask("Создаем коммит"); //$NON-NLS-1$
-            git.commit().setMessage(message).call();
+            git.commit().setMessage(ensureHeaderBodySeparator(message)).call();
             monitor.worked(1);
             return new OperationResult(Kind.SUCCESS, "Коммит создан в ветке " + branch + ".", false, true); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -89,6 +89,14 @@ public final class CommitOperations
         {
             monitor.done();
         }
+    }
+
+    private static String ensureHeaderBodySeparator(String message)
+    {
+        int headerEnd = message.indexOf('\n');
+        if (headerEnd < 0 || headerEnd == message.length() - 1 || message.charAt(headerEnd + 1) == '\n')
+            return message;
+        return message.substring(0, headerEnd + 1) + "\n" + message.substring(headerEnd + 1); //$NON-NLS-1$
     }
 
     public static OperationResult commitAndPush(Repository repository, String message,

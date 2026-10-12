@@ -100,6 +100,27 @@ public class CommitOperationsTest
     }
 
     @Test
+    public void separatesCommitHeaderFromBodyWhenCreatingCommit() throws Exception
+    {
+        Path work = Files.createTempDirectory("gitflow-commit-message-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        {
+            var config = git.getRepository().getConfig();
+            config.setString("user", null, "name", "Test"); //$NON-NLS-1$ //$NON-NLS-2$
+            config.setString("user", null, "email", "test@example.org"); //$NON-NLS-1$ //$NON-NLS-2$
+            config.save();
+            Files.writeString(work.resolve("file.txt"), "content"); //$NON-NLS-1$ //$NON-NLS-2$
+            git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
+
+            var result = CommitOperations.safeCommit(git.getRepository(), "Заголовок\nТело", false, true, //$NON-NLS-1$
+                new NullProgressMonitor());
+
+            assertTrue(result.succeeded());
+            assertEquals("Заголовок\n\nТело", git.log().call().iterator().next().getFullMessage()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void commitAndPushPublishesWithoutIncludingUntrackedFile() throws Exception
     {
         Path root = Files.createTempDirectory("gitflow-commit-push-"); //$NON-NLS-1$
