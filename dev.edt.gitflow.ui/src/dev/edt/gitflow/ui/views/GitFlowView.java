@@ -60,6 +60,8 @@ import org.eclipse.egit.core.internal.indexdiff.IndexDiffData;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CLabel;
 import org.eclipse.swt.custom.SashForm;
+import org.eclipse.swt.custom.StyleRange;
+import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
@@ -130,6 +132,8 @@ import org.eclipse.egit.ui.internal.push.PushTagsWizard;
 
 public class GitFlowView extends ViewPart
 {
+    private static final int COMMIT_SUBJECT_LIMIT = 72;
+    private static final int COMMIT_SUBJECT_COUNTER_WIDTH = 72;
     public static final String ID = "dev.edt.gitflow.ui.view.operations"; //$NON-NLS-1$
     private static final String PLUGIN_ID = "dev.edt.gitflow.ui"; //$NON-NLS-1$
     private static final int HISTORY_PAGE_SIZE = 30;
@@ -149,7 +153,7 @@ public class GitFlowView extends ViewPart
     private Button branchButton;
     private Image branchImage;
     private Button syncButton;
-    private Text messageField;
+    private StyledText messageField;
     private RepositoryState repositoryState = RepositoryState.SAFE;
     private String autoFilledMergeMessage;
     private boolean mergeMessageEdited;
@@ -191,6 +195,7 @@ public class GitFlowView extends ViewPart
     private boolean hasRemote;
     private boolean sendAfterCommit;
     private boolean smartCommit;
+    private boolean highlightCommitSubject;
     private boolean indexChangeRunning;
     private RepositoryOverview overview = new RepositoryOverview(0, -1, -1);
     private WorkingChanges changes = new WorkingChanges(List.of(), List.of());
@@ -251,9 +256,10 @@ public class GitFlowView extends ViewPart
         layout.marginHeight = 8;
         layout.verticalSpacing = 7;
         parent.setLayout(layout);
-        smartCommit = InstanceScope.INSTANCE.getNode(PLUGIN_ID).getBoolean("smartCommit", false); //$NON-NLS-1$
-        sendAfterCommit = InstanceScope.INSTANCE.getNode(PLUGIN_ID)
-            .getBoolean("sendAfterCommit", true); //$NON-NLS-1$
+        var preferences = InstanceScope.INSTANCE.getNode(PLUGIN_ID);
+        smartCommit = preferences.getBoolean("smartCommit", false); //$NON-NLS-1$
+        sendAfterCommit = preferences.getBoolean("sendAfterCommit", true); //$NON-NLS-1$
+        highlightCommitSubject = preferences.getBoolean("highlightCommitSubject", true); //$NON-NLS-1$
 
         Composite header = new Composite(parent, SWT.NONE);
         header.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -289,21 +295,48 @@ public class GitFlowView extends ViewPart
         messageLayout.marginWidth = 0;
         messageLayout.marginHeight = 0;
         messageArea.setLayout(messageLayout);
-        messageField = new Text(messageArea, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+        messageField = new StyledText(messageArea, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+        messageField.setRightMargin(COMMIT_SUBJECT_COUNTER_WIDTH);
+        messageField.addCaretListener(event -> messageField.redraw());
         messageField.addPaintListener(event ->
         {
             var background = messageField.getBackground().getRGB();
             if (background.red + background.green + background.blue < 384
                 && background.red + background.green + background.blue > 0)
                 messageField.setBackground(messageField.getDisplay().getSystemColor(SWT.COLOR_BLACK));
+            if (messageField.getCharCount() == 0)
+            {
+                var foreground = event.gc.getForeground();
+                event.gc.setForeground(messageField.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW));
+                String placeholderKey = highlightCommitSubject ? "commitMessageSubject" : "commitMessage"; //$NON-NLS-1$ //$NON-NLS-2$
+                String placeholder = Messages.get(placeholderKey);
+                event.gc.drawText(placeholder, messageField.getLeftMargin() + 1, //$NON-NLS-1$
+                    messageField.getTopMargin() + 1, SWT.DRAW_TRANSPARENT | SWT.DRAW_DELIMITER);
+                event.gc.setForeground(foreground);
+            }
+            String text = messageField.getText();
+            int lineBreak = text.indexOf('\n');
+            String subject = lineBreak >= 0 ? text.substring(0, lineBreak) : text;
+            int subjectLength = subject.codePointCount(0, subject.length());
+            int caretOffset = messageField.getCaretOffset();
+            if (highlightCommitSubject && lineBreak > 0 && caretOffset <= lineBreak)
+            {
+                int remaining = COMMIT_SUBJECT_LIMIT - subjectLength;
+                String counter = Integer.toString(remaining);
+                event.gc.setForeground(messageField.getDisplay().getSystemColor(
+                    remaining < 0 ? SWT.COLOR_RED : SWT.COLOR_WIDGET_NORMAL_SHADOW));
+                int counterX = messageField.getClientArea().width - event.gc.textExtent(counter).x - 8;
+                event.gc.drawText(counter, counterX,
+                    messageField.getTopMargin() + 1, SWT.DRAW_TRANSPARENT);
+            }
         });
-        messageField.setMessage(Messages.get("commitMessage")); //$NON-NLS-1$
         GridData messageData = new GridData(SWT.FILL, SWT.FILL, true, true);
         messageData.heightHint = messageField.getLineHeight() * 2 + 8;
         messageField.setLayoutData(messageData);
         messageField.setToolTipText(Messages.get("commitShortcutHint")); //$NON-NLS-1$
         messageField.addModifyListener(event ->
         {
+            updateCommitMessageStyle();
             if (!settingMergeMessage && repositoryState == RepositoryState.MERGING_RESOLVED)
                 mergeMessageEdited = true;
             updateCommitAvailability();
@@ -771,9 +804,51 @@ public class GitFlowView extends ViewPart
             fillChangesTree();
             updatePrimary();
         });
+        MenuItem highlight = new MenuItem(menu, SWT.CHECK);
+        highlight.setText(Messages.get("highlightCommitSubject")); //$NON-NLS-1$
+        highlight.setSelection(highlightCommitSubject);
+        highlight.addListener(SWT.Selection, event ->
+        {
+            highlightCommitSubject = highlight.getSelection();
+            var preferences = InstanceScope.INSTANCE.getNode(PLUGIN_ID);
+            preferences.putBoolean("highlightCommitSubject", highlightCommitSubject); //$NON-NLS-1$
+            try
+            {
+                preferences.flush();
+            }
+            catch (BackingStoreException e)
+            {
+                publish(Messages.get("settingSaveFailed") + " " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            updateCommitMessageStyle();
+        });
         menu.addListener(SWT.Hide, event -> anchor.getDisplay().asyncExec(menu::dispose));
         menu.setLocation(anchor.toDisplay(0, anchor.getSize().y));
         menu.setVisible(true);
+    }
+
+    private void updateCommitMessageStyle()
+    {
+        if (messageField == null || messageField.isDisposed())
+            return;
+        int lineBreak = messageField.getText().indexOf('\n');
+        int subjectLength = highlightCommitSubject && lineBreak > 0 ? lineBreak : 0;
+        StyleRange[] current = messageField.getStyleRanges();
+        if (subjectLength == 0 && current.length == 0
+            || subjectLength > 0 && current.length == 1 && current[0].start == 0
+                && current[0].length == subjectLength && current[0].fontStyle == SWT.BOLD)
+        {
+            messageField.redraw();
+            return;
+        }
+        Point selection = messageField.getSelection();
+        if (subjectLength > 0)
+            messageField.setStyleRanges(new StyleRange[] {
+                new StyleRange(0, subjectLength, null, null, SWT.BOLD) });
+        else
+            messageField.setStyleRanges(new StyleRange[0]);
+        messageField.setSelection(selection);
+        messageField.redraw();
     }
 
     private void showHistory()
