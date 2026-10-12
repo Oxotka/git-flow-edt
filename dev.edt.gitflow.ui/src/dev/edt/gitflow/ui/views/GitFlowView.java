@@ -165,6 +165,9 @@ public class GitFlowView extends ViewPart
     private final List<RecentHistory.Entry> historyEntries = new ArrayList<>();
     private boolean historyHasMore;
     private boolean historyLoading;
+    private HistorySearchSession historySearchSession;
+    private Job historySearchJob;
+    private String historySearchRevealHash;
     private boolean stagedExpanded = true;
     private boolean unstagedExpanded = true;
     private boolean hasStashedChanges;
@@ -342,6 +345,8 @@ public class GitFlowView extends ViewPart
         changesTree = changeTree(content);
         historyPane = new RecentHistoryPane(content);
         historyPane.setMenuProvider(this::historyMenu);
+        historyPane.setSearchActions(this::startHistorySearch, this::nextHistoryMatch,
+            this::historySearchQueryChanged);
         content.setWeights(70, 30);
         messageSplit.addListener(SWT.Resize, event ->
         {
@@ -1281,8 +1286,11 @@ public class GitFlowView extends ViewPart
     {
         Repository repository = selectedRepository();
         File directory = repository == null ? null : repository.getDirectory();
+        if (historySearchSession != null && !historySearchContextMatches(historySearchSession))
+            cancelHistorySearch();
         if (!Objects.equals(directory, displayedDirectory))
         {
+            cancelHistorySearch();
             closeHistoryReader(historyReader);
             historyReader = null;
             if (autoFilledMergeMessage != null
@@ -1354,7 +1362,10 @@ public class GitFlowView extends ViewPart
             refsListener = repository.getListenerList().addRefsChangedListener(event -> onUi(() ->
             {
                 if (instance == GitFlowView.this && sameRepository(selectedRepository(), repository))
+                {
+                    cancelHistorySearchIfContextChanged(repository);
                     scheduleRefresh(0);
+                }
             }));
             indexDiffEntry = IndexDiffCache.INSTANCE.getIndexDiffCacheEntry(repository);
             indexDiffEntry.addIndexDiffChangedListener(indexDiffListener);
@@ -1541,6 +1552,7 @@ public class GitFlowView extends ViewPart
                                 historyLoading = false;
                                 historyPane.setCommits(historyEntries, historyHasMore,
                                     GitFlowView.this::loadMoreHistory);
+                                continueHistoryReveal();
                             }
                             if (changesUpdated)
                                 fillChangesTree();
@@ -1629,6 +1641,7 @@ public class GitFlowView extends ViewPart
                         historyHasMore = page.hasMore();
                         historyPane.appendCommits(nextPage, historyHasMore,
                             GitFlowView.this::loadMoreHistory);
+                        continueHistoryReveal();
                     });
                     return Status.OK_STATUS;
                 }
@@ -1661,11 +1674,242 @@ public class GitFlowView extends ViewPart
         }.schedule();
     }
 
+    private void startHistorySearch()
+    {
+        Repository repository = selectedRepository();
+        String query = historyPane.getSearchQuery();
+        if (repository == null || query.isEmpty())
+            return;
+        cancelHistorySearch();
+        try
+        {
+            historySearchSession = new HistorySearchSession(repository, repository.getBranch(),
+                repository.resolve(Constants.HEAD), query);
+            showFeedback(Messages.get("historySearchRunning")); //$NON-NLS-1$
+            runHistorySearch(historySearchSession);
+        }
+        catch (IOException e)
+        {
+            showFeedback(Messages.get("historySearchFailed") + " " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    private void nextHistoryMatch()
+    {
+        HistorySearchSession session = historySearchSession;
+        if (session == null || !session.query.equals(historyPane.getSearchQuery())
+            || !historySearchContextMatches(session))
+        {
+            startHistorySearch();
+            return;
+        }
+        showFeedback(Messages.get("historySearchRunning")); //$NON-NLS-1$
+        runHistorySearch(session);
+    }
+
+    private void runHistorySearch(HistorySearchSession session)
+    {
+        historyPane.setSearchRunning(true);
+        HistorySearchJob job = new HistorySearchJob(session);
+        historySearchJob = job;
+        job.addJobChangeListener(new JobChangeAdapter()
+        {
+            @Override
+            public void done(IJobChangeEvent event)
+            {
+                onUi(() ->
+                {
+                    if (historySearchJob == job)
+                        historySearchJob = null;
+                    boolean current = instance == GitFlowView.this && historySearchSession == session
+                        && historySearchContextMatches(session)
+                        && session.query.equals(historyPane.getSearchQuery());
+                    if (!current)
+                    {
+                        closeHistoryReader(session.reader);
+                        session.reader = null;
+                        return;
+                    }
+                    historyPane.setSearchRunning(false);
+                    completeHistorySearch(event, job.match, job.failure);
+                });
+            }
+        });
+        job.setSystem(true);
+        job.schedule();
+    }
+
+    private void completeHistorySearch(IJobChangeEvent event, String match, Exception failure)
+    {
+        if (failure != null)
+        {
+            cancelHistorySearch();
+            showFeedback(Messages.get("historySearchFailed") + " " + failure.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else if (event.getResult().getSeverity() == IStatus.CANCEL)
+            cancelHistorySearch();
+        else if (match == null)
+        {
+            Display.getDefault().beep();
+            showFeedback(Messages.get("historySearchNoMore")); //$NON-NLS-1$
+        }
+        else
+        {
+            historySearchRevealHash = match;
+            showFeedback(Messages.get("historySearchFound")); //$NON-NLS-1$
+            continueHistoryReveal();
+        }
+    }
+
+    private final class HistorySearchJob extends Job
+    {
+        private final HistorySearchSession session;
+        private String match;
+        private Exception failure;
+
+        private HistorySearchJob(HistorySearchSession session)
+        {
+            super(Messages.get("historySearchRunning")); //$NON-NLS-1$
+            this.session = session;
+        }
+
+        @Override
+        protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
+        {
+            try
+            {
+                if (monitor.isCanceled())
+                    return Status.CANCEL_STATUS;
+                if (session.reader == null)
+                    session.reader = RecentHistory.openSearch(session.repository, session.head);
+                match = session.reader.findNext(session.query, monitor);
+                return Status.OK_STATUS;
+            }
+            catch (org.eclipse.core.runtime.OperationCanceledException e)
+            {
+                return Status.CANCEL_STATUS;
+            }
+            catch (Exception e)
+            {
+                failure = e;
+                return new Status(IStatus.ERROR, PLUGIN_ID, e.getMessage(), e);
+            }
+        }
+    }
+
+    private void historySearchQueryChanged()
+    {
+        HistorySearchSession session = historySearchSession;
+        if (session != null && !session.query.equals(historyPane.getSearchQuery()))
+            cancelHistorySearch();
+        historySearchRevealHash = null;
+    }
+
+    private void cancelHistorySearchIfContextChanged(Repository repository)
+    {
+        HistorySearchSession session = historySearchSession;
+        if (session != null && sameRepository(session.repository, repository)
+            && !historySearchContextMatches(session))
+            cancelHistorySearch();
+    }
+
+    private boolean historySearchContextMatches(HistorySearchSession session)
+    {
+        try
+        {
+            return sameRepository(selectedRepository(), session.repository)
+                && Objects.equals(session.branch, session.repository.getBranch())
+                && Objects.equals(session.head, session.repository.resolve(Constants.HEAD));
+        }
+        catch (IOException e)
+        {
+            return false;
+        }
+    }
+
+    private void cancelHistorySearch()
+    {
+        HistorySearchSession session = historySearchSession;
+        historySearchSession = null;
+        historySearchRevealHash = null;
+        if (historySearchJob != null)
+            historySearchJob.cancel();
+        else if (session != null && session.reader != null)
+        {
+            closeHistoryReader(session.reader);
+            session.reader = null;
+        }
+        if (historyPane != null && !historyPane.isDisposed())
+            historyPane.setSearchRunning(false);
+    }
+
+    private void continueHistoryReveal()
+    {
+        String hash = historySearchRevealHash;
+        if (hash == null || historyPane == null || historyPane.isDisposed())
+            return;
+        HistorySearchSession session = historySearchSession;
+        if (session == null || !Objects.equals(historyHead, session.head))
+            return;
+        int index = -1;
+        for (int i = 0; i < historyEntries.size(); i++)
+        {
+            if (historyEntries.get(i).hash().equals(hash))
+            {
+                index = i;
+                break;
+            }
+        }
+        if (index >= 0 && (historyEntries.size() - index - 1 >= 5 || !historyHasMore))
+        {
+            historyPane.selectCommit(hash);
+            historySearchRevealHash = null;
+        }
+        else if (historyHasMore)
+            loadMoreHistory();
+        else if (index < 0)
+            historySearchRevealHash = null;
+    }
+
+    private static final class HistorySearchSession
+    {
+        private final Repository repository;
+        private final String branch;
+        private final ObjectId head;
+        private final String query;
+        private RecentHistory.SearchReader reader;
+
+        private HistorySearchSession(Repository repository, String branch, ObjectId head, String query)
+        {
+            this.repository = repository;
+            this.branch = branch;
+            this.head = head;
+            this.query = query;
+        }
+    }
+
     private static void closeHistoryReader(RecentHistory.Reader reader)
     {
         if (reader == null)
             return;
         Job closeJob = new Job("Закрыть историю коммитов") //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
+            {
+                reader.close();
+                return Status.OK_STATUS;
+            }
+        };
+        closeJob.setSystem(true);
+        closeJob.schedule();
+    }
+
+    private static void closeHistoryReader(RecentHistory.SearchReader reader)
+    {
+        if (reader == null)
+            return;
+        Job closeJob = new Job("Закрыть поиск по истории коммитов") //$NON-NLS-1$
         {
             @Override
             protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
@@ -2679,6 +2923,8 @@ public class GitFlowView extends ViewPart
     @Override
     public void dispose()
     {
+        cancelHistorySearch();
+        historySearchRevealHash = null;
         getSite().getPage().removeSelectionListener(selectionListener);
         ResourcesPlugin.getWorkspace().removeResourceChangeListener(resourceListener);
         if (indexDiffEntry != null)

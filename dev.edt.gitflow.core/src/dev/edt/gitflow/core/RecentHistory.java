@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -18,6 +19,7 @@ import org.eclipse.jgit.revplot.PlotCommitList;
 import org.eclipse.jgit.revplot.PlotLane;
 import org.eclipse.jgit.revplot.PlotWalk;
 import org.eclipse.jgit.revwalk.RevSort;
+import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.OperationCanceledException;
@@ -40,6 +42,100 @@ public final class RecentHistory
     public static Reader open(Repository repository) throws IOException
     {
         return new Reader(repository);
+    }
+
+    public static SearchReader openSearch(Repository repository) throws IOException
+    {
+        return new SearchReader(repository, repository.resolve(Constants.HEAD));
+    }
+
+    public static SearchReader openSearch(Repository repository, ObjectId head) throws IOException
+    {
+        return new SearchReader(repository, head);
+    }
+
+    public static final class SearchReader implements AutoCloseable
+    {
+        private final ObjectId head;
+        private final CancellableRevWalk walk;
+        private boolean closed;
+
+        private SearchReader(Repository repository, ObjectId head) throws IOException
+        {
+            this.head = head;
+            walk = new CancellableRevWalk(repository);
+            try
+            {
+                resetWalk();
+            }
+            catch (IOException | RuntimeException e)
+            {
+                walk.close();
+                throw e;
+            }
+        }
+
+        public synchronized String findNext(String query, IProgressMonitor monitor) throws IOException
+        {
+            if (closed || head == null || query == null || query.isBlank())
+                return null;
+            String normalized = query.strip().toLowerCase(Locale.ROOT);
+            walk.setMonitor(monitor == null ? new NullProgressMonitor() : monitor);
+            try
+            {
+                org.eclipse.jgit.revwalk.RevCommit commit;
+                while ((commit = walk.next()) != null)
+                {
+                    walk.parseBody(commit);
+                    if (matches(commit, normalized))
+                        return commit.name();
+                }
+                resetWalk();
+                return null;
+            }
+            catch (OperationCanceledException e)
+            {
+                resetWalk();
+                throw e;
+            }
+            finally
+            {
+                walk.setMonitor(new NullProgressMonitor());
+            }
+        }
+
+        public synchronized void restart() throws IOException
+        {
+            if (!closed)
+                resetWalk();
+        }
+
+        private void resetWalk() throws IOException
+        {
+            walk.reset();
+            walk.sort(RevSort.TOPO, true);
+            if (head != null)
+                walk.markStart(walk.parseCommit(head));
+        }
+
+        private static boolean matches(org.eclipse.jgit.revwalk.RevCommit commit, String query)
+        {
+            String message = commit.getFullMessage();
+            String author = commit.getAuthorIdent() == null ? "" : commit.getAuthorIdent().getName(); //$NON-NLS-1$
+            return commit.name().startsWith(query)
+                || message.toLowerCase(Locale.ROOT).contains(query)
+                || author.toLowerCase(Locale.ROOT).contains(query);
+        }
+
+        @Override
+        public synchronized void close()
+        {
+            if (!closed)
+            {
+                closed = true;
+                walk.close();
+            }
+        }
     }
 
     public static final class Reader implements AutoCloseable
@@ -154,6 +250,29 @@ public final class RecentHistory
         public org.eclipse.jgit.revwalk.RevCommit next() throws IOException
         {
             checkCanceled();
+            return super.next();
+        }
+    }
+
+    private static final class CancellableRevWalk extends RevWalk
+    {
+        private IProgressMonitor monitor = new NullProgressMonitor();
+
+        CancellableRevWalk(Repository repository)
+        {
+            super(repository);
+        }
+
+        void setMonitor(IProgressMonitor monitor)
+        {
+            this.monitor = monitor;
+        }
+
+        @Override
+        public org.eclipse.jgit.revwalk.RevCommit next() throws IOException
+        {
+            if (monitor.isCanceled())
+                throw new OperationCanceledException();
             return super.next();
         }
     }

@@ -11,18 +11,23 @@ import org.eclipse.jgit.revplot.AbstractPlotRenderer;
 import org.eclipse.jgit.revplot.PlotCommit;
 import org.eclipse.jgit.revplot.PlotLane;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.accessibility.AccessibleAdapter;
+import org.eclipse.swt.accessibility.AccessibleEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
 import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.Text;
 
 import dev.edt.gitflow.core.RecentHistory;
+import dev.edt.gitflow.ui.handlers.Messages;
 
 final class RecentHistoryPane extends Composite
 {
@@ -30,12 +35,21 @@ final class RecentHistoryPane extends Composite
     private static final String LOAD_MORE_TEXT = "Показать еще"; //$NON-NLS-1$
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"); //$NON-NLS-1$
     private final Table table;
+    private final Composite searchRow;
+    private final Composite searchButtons;
+    private final Text searchText;
+    private final Button clearSearchButton;
+    private final Button nextMatchButton;
     private final Color dotFill;
     private final Color dotOutline;
     private Function<RecentHistory.Entry, Menu> menuProvider;
     private Menu contextMenu;
     private Runnable loadMoreAction;
+    private Runnable startSearchAction;
+    private Runnable nextMatchAction;
+    private Runnable queryChangedAction;
     private boolean loadingMore;
+    private boolean searchRunning;
 
     RecentHistoryPane(Composite parent)
     {
@@ -44,6 +58,68 @@ final class RecentHistoryPane extends Composite
         layout.marginWidth = 0;
         layout.marginHeight = 0;
         setLayout(layout);
+        searchRow = new Composite(this, SWT.NONE);
+        searchRow.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridLayout searchLayout = new GridLayout(2, false);
+        searchLayout.marginWidth = 0;
+        searchLayout.marginHeight = 0;
+        searchLayout.horizontalSpacing = 0;
+        searchRow.setLayout(searchLayout);
+        searchText = new Text(searchRow, SWT.SINGLE | SWT.BORDER);
+        searchText.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        searchText.setMessage(Messages.get("searchHistory")); //$NON-NLS-1$
+        searchText.setToolTipText(Messages.get("historySearchHint")); //$NON-NLS-1$
+        searchText.addListener(SWT.DefaultSelection, event ->
+        {
+            if (!searchText.getText().isBlank() && startSearchAction != null)
+                startSearchAction.run();
+        });
+        searchText.addListener(SWT.Modify, event ->
+        {
+            updateNextMatchButton();
+            if (queryChangedAction != null)
+                queryChangedAction.run();
+        });
+        searchText.addListener(SWT.KeyDown, this::handleSearchKey);
+        searchButtons = new Composite(searchRow, SWT.NONE);
+        GridLayout buttonsLayout = new GridLayout(2, false);
+        buttonsLayout.marginWidth = 0;
+        buttonsLayout.marginHeight = 0;
+        buttonsLayout.horizontalSpacing = 6;
+        searchButtons.setLayout(buttonsLayout);
+        clearSearchButton = new Button(searchButtons, SWT.PUSH);
+        GridData clearSearchData = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        clearSearchData.exclude = true;
+        clearSearchButton.setLayoutData(clearSearchData);
+        clearSearchButton.setVisible(false);
+        clearSearchButton.setText("×"); //$NON-NLS-1$
+        clearSearchButton.setToolTipText(Messages.get("clearHistorySearch")); //$NON-NLS-1$
+        clearSearchButton.getAccessible().addAccessibleListener(new AccessibleAdapter()
+        {
+            @Override
+            public void getName(AccessibleEvent event)
+            {
+                event.result = Messages.get("clearHistorySearch"); //$NON-NLS-1$
+            }
+        });
+        clearSearchButton.addListener(SWT.Selection, event -> searchText.setText("")); //$NON-NLS-1$
+        nextMatchButton = new Button(searchButtons, SWT.PUSH);
+        GridData nextMatchData = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        nextMatchData.exclude = true;
+        nextMatchButton.setLayoutData(nextMatchData);
+        nextMatchButton.setVisible(false);
+        nextMatchButton.setText("↓"); //$NON-NLS-1$
+        nextMatchButton.setToolTipText(Messages.get("nextHistoryMatch")); //$NON-NLS-1$
+        nextMatchButton.getAccessible().addAccessibleListener(new AccessibleAdapter()
+        {
+            @Override
+            public void getName(AccessibleEvent event)
+            {
+                event.result = Messages.get("nextHistoryMatch"); //$NON-NLS-1$
+            }
+        });
+        nextMatchButton.addListener(SWT.Selection, event -> runNextMatch());
+        updateNextMatchButton();
         dotFill = new Color(getDisplay(), 220, 220, 220);
         dotOutline = new Color(getDisplay(), 110, 110, 110);
         table = new Table(this, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL | SWT.BORDER);
@@ -126,7 +202,12 @@ final class RecentHistoryPane extends Composite
         });
         table.addListener(SWT.KeyDown, event ->
         {
-            if (event.keyCode == SWT.CR && !loadingMore && table.getSelectionCount() == 1
+            if (event.keyCode == SWT.F3)
+            {
+                runNextMatch();
+                event.doit = false;
+            }
+            else if (event.keyCode == SWT.CR && !loadingMore && table.getSelectionCount() == 1
                 && table.getSelection()[0].getData() == LOAD_MORE && loadMoreAction != null)
                 loadMoreAction.run();
         });
@@ -164,6 +245,38 @@ final class RecentHistoryPane extends Composite
     void setMenuProvider(Function<RecentHistory.Entry, Menu> provider)
     {
         menuProvider = provider;
+    }
+
+    void setSearchActions(Runnable startSearch, Runnable nextMatch, Runnable queryChanged)
+    {
+        startSearchAction = startSearch;
+        nextMatchAction = nextMatch;
+        queryChangedAction = queryChanged;
+    }
+
+    void setSearchRunning(boolean running)
+    {
+        searchRunning = running;
+        updateNextMatchButton();
+    }
+
+    String getSearchQuery()
+    {
+        return searchText.getText().strip();
+    }
+
+    boolean selectCommit(String hash)
+    {
+        for (TableItem item : table.getItems())
+        {
+            if (item.getData() instanceof RecentHistory.Entry entry && entry.hash().equals(hash))
+            {
+                table.setSelection(item);
+                table.showItem(item);
+                return true;
+            }
+        }
+        return false;
     }
 
     void setCommits(List<RecentHistory.Entry> commits, boolean hasMore, Runnable action)
@@ -230,6 +343,47 @@ final class RecentHistoryPane extends Composite
             item.setText(LOAD_MORE_TEXT);
             item.setData(LOAD_MORE);
         }
+    }
+
+    private void handleSearchKey(org.eclipse.swt.widgets.Event event)
+    {
+        if (event.keyCode == SWT.F3)
+        {
+            runNextMatch();
+            event.doit = false;
+        }
+    }
+
+    private void runNextMatch()
+    {
+        if (!getSearchQuery().isEmpty() && nextMatchButton.getVisible()
+            && nextMatchButton.getEnabled() && nextMatchAction != null)
+            nextMatchAction.run();
+    }
+
+    private void updateNextMatchButton()
+    {
+        boolean visible = !searchText.getText().isBlank();
+        GridData clearLayoutData = (GridData) clearSearchButton.getLayoutData();
+        GridData nextLayoutData = (GridData) nextMatchButton.getLayoutData();
+        boolean layoutChanged = clearSearchButton.getVisible() != visible
+            || nextMatchButton.getVisible() != visible || clearLayoutData.exclude == visible
+            || nextLayoutData.exclude == visible;
+        nextMatchButton.setEnabled(visible && !searchRunning);
+        if (layoutChanged)
+            getDisplay().asyncExec(() ->
+            {
+                if (!searchButtons.isDisposed())
+                {
+                    boolean latestVisible = !searchText.getText().isBlank();
+                    clearSearchButton.setVisible(latestVisible);
+                    nextMatchButton.setVisible(latestVisible);
+                    clearLayoutData.exclude = !latestVisible;
+                    nextLayoutData.exclude = !latestVisible;
+                    searchButtons.layout(true, true);
+                    searchRow.layout(true, true);
+                }
+            });
     }
 
     private void paintMessage(GC gc, int x, int y, int width, RecentHistory.Entry entry)
