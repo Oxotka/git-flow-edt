@@ -134,10 +134,17 @@ public final class PullOperations
             }
 
             Status localStatus = git.status().call();
-            Set<String> overlaps = overlappingPaths(repository, head, upstream, localStatus);
+            ObjectId base = findMergeBase(repository, head, upstream);
+            Set<String> remotePaths = changedPaths(repository, base, upstream);
+            Set<String> localPaths = changedPaths(repository, base, head);
+            Set<String> workingPaths = workingPaths(localStatus);
+            Set<String> overlaps = new TreeSet<>(localPaths);
+            overlaps.addAll(workingPaths);
+            overlaps.retainAll(remotePaths);
             if (!overlaps.isEmpty())
             {
-                Set<String> workingOverlaps = overlappingWorkingPaths(repository, head, upstream, localStatus);
+                Set<String> workingOverlaps = new TreeSet<>(workingPaths);
+                workingOverlaps.retainAll(remotePaths);
                 if (workingOverlaps.isEmpty() && diverged(repository, head, upstream))
                     return new OperationResult(Kind.NEEDS_NATIVE_MERGE,
                         "Локальные и удаленные коммиты меняют одни файлы. Запускается штатное слияние EDT."); //$NON-NLS-1$
@@ -355,25 +362,6 @@ public final class PullOperations
         for (@SuppressWarnings("unused") RevCommit commit : git.log().addRange(oldId, newId).call())
             count++;
         return count;
-    }
-
-    private static Set<String> overlappingPaths(Repository repository, ObjectId head, ObjectId upstream,
-        Status localStatus) throws IOException
-    {
-        ObjectId base = findMergeBase(repository, head, upstream);
-        Set<String> localPaths = changedPaths(repository, base, head);
-        localPaths.addAll(workingPaths(localStatus));
-        localPaths.retainAll(changedPaths(repository, base, upstream));
-        return localPaths;
-    }
-
-    private static Set<String> overlappingWorkingPaths(Repository repository, ObjectId head, ObjectId upstream,
-        Status localStatus) throws IOException
-    {
-        ObjectId base = findMergeBase(repository, head, upstream);
-        Set<String> workingPaths = workingPaths(localStatus);
-        workingPaths.retainAll(changedPaths(repository, base, upstream));
-        return workingPaths;
     }
 
     private static Set<String> workingPaths(Status status)

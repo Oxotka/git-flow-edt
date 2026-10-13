@@ -1,16 +1,18 @@
 package dev.edt.gitflow.ui.handlers;
 
-import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.expressions.IEvaluationContext;
 import org.eclipse.core.runtime.jobs.IJobChangeEvent;
+import org.eclipse.core.runtime.jobs.IJobManager;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.jobs.JobChangeAdapter;
-import org.eclipse.core.runtime.jobs.IJobManager;
-import org.eclipse.core.expressions.IEvaluationContext;
+import org.eclipse.egit.ui.JobFamilies;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.ui.ISources;
@@ -44,17 +46,7 @@ public final class NativePullLauncher
         IEvaluationContext context = handlers.createContextSnapshot(false);
         context.addVariable(ISources.ACTIVE_MENU_SELECTION_NAME, new StructuredSelection(project));
         AtomicReference<Job> pullJob = new AtomicReference<>();
-        boolean[] markedRunning = { false };
-        String branch;
-        try
-        {
-            branch = repository.getBranch();
-        }
-        catch (IOException e)
-        {
-            GitFlowView.publish(title + ": Не удалось определить текущую ветку: " + e.getMessage()); //$NON-NLS-1$
-            return;
-        }
+        AtomicBoolean pullJobSeen = new AtomicBoolean();
         IJobManager manager = Job.getJobManager();
         JobChangeAdapter listener = new JobChangeAdapter()
         {
@@ -62,10 +54,11 @@ public final class NativePullLauncher
             public void scheduled(IJobChangeEvent event)
             {
                 Job job = event.getJob();
-                if (job.getName().startsWith("Pulling branch ") && job.getName().contains(branch + " - ") //$NON-NLS-1$ //$NON-NLS-2$
-                    && pullJob.compareAndSet(null, job))
+                if (!job.belongsTo(JobFamilies.PULL))
+                    return;
+                pullJobSeen.set(true);
+                if (operatesOn(job, repository) && pullJob.compareAndSet(null, job))
                 {
-                    markedRunning[0] = true;
                     GitFlowView.started(repository);
                     GitFlowView.useRepository(repository);
                     GitFlowView.publish(title + ": Запущено штатное получение и слияние EDT. После него проверьте исходящие коммиты."); //$NON-NLS-1$
@@ -91,17 +84,55 @@ public final class NativePullLauncher
             if (pullJob.get() == null)
             {
                 manager.removeJobChangeListener(listener);
-                GitFlowView.publish(title + ": EDT не запустила штатное получение и слияние."); //$NON-NLS-1$
+                String message = pullJobSeen.get()
+                    ? ": Штатный Pull запущен, но не удалось связать его с репозиторием для обновления панели. Проверьте результат в EDT." //$NON-NLS-1$
+                    : ": EDT не запустила штатное получение и слияние."; //$NON-NLS-1$
+                GitFlowView.publish(title + message);
             }
         }
         catch (Exception e)
         {
-            manager.removeJobChangeListener(listener);
-            if (markedRunning[0])
-                GitFlowView.finished(repository);
+            if (pullJob.get() == null)
+                manager.removeJobChangeListener(listener);
             GitFlowView.publish(title + ": Не удалось запустить штатное получение и слияние EDT: " //$NON-NLS-1$
                 + e.getMessage());
         }
+    }
+
+    private static boolean operatesOn(Job job, Repository repository)
+    {
+        try
+        {
+            Field outerField = findField(job.getClass(), "this$0"); //$NON-NLS-1$
+            outerField.setAccessible(true);
+            Object operation = outerField.get(job);
+            Field repositoriesField = findField(operation.getClass(), "repositories"); //$NON-NLS-1$
+            repositoriesField.setAccessible(true);
+            Object repositories = repositoriesField.get(operation);
+            if (repositories instanceof Repository[] values)
+                for (Repository value : values)
+                    if (repository.equals(value))
+                        return true;
+        }
+        catch (ReflectiveOperationException | RuntimeException e)
+        {
+            // EGit's Pull job is internal; if its structure changes, keep the native action available.
+        }
+        return false;
+    }
+
+    private static Field findField(Class<?> type, String name) throws NoSuchFieldException
+    {
+        for (Class<?> current = type; current != null; current = current.getSuperclass())
+            try
+            {
+                return current.getDeclaredField(name);
+            }
+            catch (NoSuchFieldException e)
+            {
+                // The field may be declared by a superclass.
+            }
+        throw new NoSuchFieldException(type.getName() + "." + name); //$NON-NLS-1$
     }
 
     private static IProject projectFor(Repository repository)

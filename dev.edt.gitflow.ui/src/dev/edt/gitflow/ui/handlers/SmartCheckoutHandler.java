@@ -20,7 +20,12 @@ public final class SmartCheckoutHandler
         else if (result == Window.OK)
             OperationJob.schedule(repository, shell, Messages.get("checkoutTitle"), //$NON-NLS-1$
                 (selected, monitor) -> BranchOperations.checkout(selected, dialog.branch(), dialog.createBranch(),
-                    dialog.startPoint(), monitor), null);
+                    dialog.startPoint(), monitor), null,
+                operationResult ->
+                {
+                    if (operationResult.workspaceChanged())
+                        ProjectRefreshSupport.afterCheckout(repository);
+                });
     }
 
     public static void openCreateBranchWizard(org.eclipse.swt.widgets.Shell shell, Repository repository)

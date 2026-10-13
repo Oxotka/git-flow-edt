@@ -630,7 +630,12 @@ final class BranchPicker
         OperationJob.schedule(repository, tree.getShell(), Messages.get("checkoutTitle"), //$NON-NLS-1$
             (selectedRepository, monitor) -> BranchOperations.checkout(selectedRepository, localName, create,
                 create ? choice.ref() : null, monitor), null,
-            result -> refreshAfter(result));
+            result ->
+            {
+                if (result.workspaceChanged())
+                    ProjectRefreshSupport.afterCheckout(repository);
+                refreshAfter(result);
+            });
     }
 
     private void schedulePull()

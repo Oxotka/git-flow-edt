@@ -64,6 +64,8 @@ import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
@@ -296,7 +298,12 @@ public class GitFlowView extends ViewPart
         messageLayout.marginHeight = 0;
         messageArea.setLayout(messageLayout);
         messageField = new StyledText(messageArea, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
-        messageField.setRightMargin(COMMIT_SUBJECT_COUNTER_WIDTH);
+        messageField.setRightMargin(highlightCommitSubject ? COMMIT_SUBJECT_COUNTER_WIDTH : 0);
+        FontData[] subjectFontData = messageField.getFont().getFontData();
+        for (FontData fontData : subjectFontData)
+            fontData.setStyle(fontData.getStyle() | SWT.BOLD);
+        Font subjectFont = new Font(messageField.getDisplay(), subjectFontData);
+        messageField.addDisposeListener(event -> subjectFont.dispose());
         messageField.addCaretListener(event -> messageField.redraw());
         messageField.addPaintListener(event ->
         {
@@ -310,8 +317,21 @@ public class GitFlowView extends ViewPart
                 event.gc.setForeground(messageField.getDisplay().getSystemColor(SWT.COLOR_WIDGET_NORMAL_SHADOW));
                 String placeholderKey = highlightCommitSubject ? "commitMessageSubject" : "commitMessage"; //$NON-NLS-1$ //$NON-NLS-2$
                 String placeholder = Messages.get(placeholderKey);
-                event.gc.drawText(placeholder, messageField.getLeftMargin() + 1, //$NON-NLS-1$
-                    messageField.getTopMargin() + 1, SWT.DRAW_TRANSPARENT | SWT.DRAW_DELIMITER);
+                int placeholderX = messageField.getLeftMargin() + 1;
+                int placeholderY = messageField.getTopMargin() + 1;
+                int placeholderBreak = placeholder.indexOf('\n');
+                if (highlightCommitSubject && placeholderBreak >= 0)
+                {
+                    event.gc.setFont(subjectFont);
+                    event.gc.drawText(placeholder.substring(0, placeholderBreak), placeholderX, placeholderY,
+                        SWT.DRAW_TRANSPARENT);
+                    event.gc.setFont(messageField.getFont());
+                    event.gc.drawText(placeholder.substring(placeholderBreak + 1), placeholderX,
+                        placeholderY + messageField.getLineHeight(), SWT.DRAW_TRANSPARENT | SWT.DRAW_DELIMITER);
+                }
+                else
+                    event.gc.drawText(placeholder, placeholderX, placeholderY,
+                        SWT.DRAW_TRANSPARENT | SWT.DRAW_DELIMITER);
                 event.gc.setForeground(foreground);
             }
             String text = messageField.getText();
@@ -319,7 +339,7 @@ public class GitFlowView extends ViewPart
             String subject = lineBreak >= 0 ? text.substring(0, lineBreak) : text;
             int subjectLength = subject.codePointCount(0, subject.length());
             int caretOffset = messageField.getCaretOffset();
-            if (highlightCommitSubject && lineBreak > 0 && caretOffset <= lineBreak)
+            if (highlightCommitSubject && (lineBreak < 0 || caretOffset <= lineBreak))
             {
                 int remaining = COMMIT_SUBJECT_LIMIT - subjectLength;
                 String counter = Integer.toString(remaining);
@@ -810,6 +830,7 @@ public class GitFlowView extends ViewPart
         highlight.addListener(SWT.Selection, event ->
         {
             highlightCommitSubject = highlight.getSelection();
+            messageField.setRightMargin(highlightCommitSubject ? COMMIT_SUBJECT_COUNTER_WIDTH : 0);
             var preferences = InstanceScope.INSTANCE.getNode(PLUGIN_ID);
             preferences.putBoolean("highlightCommitSubject", highlightCommitSubject); //$NON-NLS-1$
             try
@@ -831,8 +852,9 @@ public class GitFlowView extends ViewPart
     {
         if (messageField == null || messageField.isDisposed())
             return;
-        int lineBreak = messageField.getText().indexOf('\n');
-        int subjectLength = highlightCommitSubject && lineBreak > 0 ? lineBreak : 0;
+        String text = messageField.getText();
+        int lineBreak = text.indexOf('\n');
+        int subjectLength = highlightCommitSubject ? (lineBreak >= 0 ? lineBreak : text.length()) : 0;
         StyleRange[] current = messageField.getStyleRanges();
         if (subjectLength == 0 && current.length == 0
             || subjectLength > 0 && current.length == 1 && current[0].start == 0

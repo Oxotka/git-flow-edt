@@ -11,7 +11,9 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.eclipse.egit.core.internal.job.RuleUtil;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jgit.api.errors.GitAPIException;
@@ -291,6 +293,7 @@ final class StagingSmartPush
         hideRebaseSection(button);
         view.getViewSite().getActionBars().getStatusLineManager()
             .setMessage("Smart Push выполняется…"); //$NON-NLS-1$
+        OperationResult[] completion = new OperationResult[1];
         Job job = new Job("Smart Push") //$NON-NLS-1$
         {
             @Override
@@ -306,13 +309,35 @@ final class StagingSmartPush
                     log("Smart Push завершился с ошибкой.", e); //$NON-NLS-1$
                     result = new OperationResult(OperationResult.Kind.ERROR, e.getMessage());
                 }
-                OperationResult outcome = result;
-                Display.getDefault().asyncExec(() -> showResult(view, button, repository,
-                    outcome, committed));
+                completion[0] = result;
                 return Status.OK_STATUS;
             }
         };
         job.setSystem(true);
+        job.setRule(RuleUtil.getRule(repository));
+        job.addJobChangeListener(new JobChangeAdapter()
+        {
+            @Override
+            public void done(IJobChangeEvent event)
+            {
+                OperationResult outcome = completion[0];
+                if (outcome == null)
+                {
+                    boolean cancelled = event.getResult().getSeverity() == IStatus.CANCEL;
+                    outcome = new OperationResult(cancelled ? OperationResult.Kind.CANCELLED
+                        : OperationResult.Kind.ERROR, cancelled ? "Операция отменена" //$NON-NLS-1$
+                            : event.getResult().getMessage());
+                }
+                OperationResult result = outcome;
+                Display.getDefault().asyncExec(() ->
+                {
+                    GitFlowView.finished(repository);
+                    showResult(view, button, repository, result, committed);
+                });
+            }
+        });
+        GitFlowView.started(repository);
+        GitFlowView.useRepository(repository);
         job.schedule();
     }
 

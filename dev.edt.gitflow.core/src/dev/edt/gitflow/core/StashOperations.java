@@ -3,13 +3,13 @@ package dev.edt.gitflow.core;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Collection;
 
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.StashApplyFailureException;
 import org.eclipse.jgit.lib.Constants;
+import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 
@@ -65,17 +65,16 @@ public final class StashOperations
         monitor.beginTask("Восстановление стеша", 3); //$NON-NLS-1$
         try
         {
-            Git git = Git.wrap(repository); // EGit owns the repository; do not close it here.
-            Collection<RevCommit> stashes = git.stashList().call();
-            if (stashes.isEmpty())
+            Ref stash = repository.exactRef(Constants.R_STASH);
+            if (stash == null || stash.getObjectId() == null)
                 return new Result(Outcome.NOT_FOUND, null);
-            String stashId = stashes.iterator().next().getId().name();
+            String stashId = stash.getObjectId().name();
             monitor.worked(1);
             Result result = applyAndDrop(repository, stashId);
             monitor.worked(2);
             return result;
         }
-        catch (GitAPIException e)
+        catch (IOException e)
         {
             return new Result(Outcome.ERROR, e.getMessage());
         }
@@ -90,8 +89,7 @@ public final class StashOperations
         try
         {
             Git git = Git.wrap(repository);
-            Collection<RevCommit> stashes = git.stashList().call();
-            if (stashes.isEmpty() || !stashes.iterator().next().getId().name().equals(stashId))
+            if (!isTopStash(repository, stashId))
                 return new Result(Outcome.ERROR, "Список стешей изменился. Стеш не применен."); //$NON-NLS-1$
             try
             {
@@ -103,15 +101,20 @@ public final class StashOperations
                 return new Result(Outcome.CONFLICTS, e.getMessage());
             }
             // The stash may have changed outside this Job; never drop a different entry.
-            Collection<RevCommit> current = git.stashList().call();
-            if (current.isEmpty() || !current.iterator().next().getId().name().equals(stashId))
+            if (!isTopStash(repository, stashId))
                 return new Result(Outcome.ERROR, "Изменения восстановлены, но список стешей изменился. Стеш сохранен."); //$NON-NLS-1$
             git.stashDrop().setStashRef(0).call();
             return new Result(Outcome.APPLIED, null);
         }
-        catch (GitAPIException e)
+        catch (GitAPIException | IOException e)
         {
             return new Result(Outcome.ERROR, e.getMessage());
         }
+    }
+
+    private static boolean isTopStash(Repository repository, String stashId) throws IOException
+    {
+        Ref stash = repository.exactRef(Constants.R_STASH);
+        return stash != null && stash.getObjectId() != null && stashId.equals(stash.getObjectId().name());
     }
 }
