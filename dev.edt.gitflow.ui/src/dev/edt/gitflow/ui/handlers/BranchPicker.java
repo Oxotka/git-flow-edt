@@ -15,23 +15,30 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 
+import org.eclipse.core.commands.State;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.preferences.InstanceScope;
+import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.jface.viewers.DecorationOverlayIcon;
 import org.eclipse.jface.viewers.IDecoration;
+import org.eclipse.jface.window.Window;
 import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
@@ -42,20 +49,25 @@ import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.Tree;
 import org.eclipse.swt.widgets.TreeItem;
-import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Color;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 import org.osgi.service.prefs.BackingStoreException;
 import org.osgi.service.prefs.Preferences;
+import dev.edt.gitflow.core.OperationResult;
+import dev.edt.gitflow.core.BranchOperations;
 import dev.edt.gitflow.core.BranchPickerIndex;
+import dev.edt.gitflow.core.PullOperations;
 
 final class BranchPicker
 {
     enum Kind { BRANCH, TAG }
+
+    private enum SortOrder { ACTIVITY_NEWEST_FIRST, ACTIVITY_OLDEST_FIRST, NAME_ASCENDING, NAME_DESCENDING }
 
     private record Folder(String path, boolean remote)
     {
@@ -71,8 +83,16 @@ final class BranchPicker
     }
 
     private final Composite panel;
+    private final Repository repository;
+    private final boolean includeRemote;
     private final Tree tree;
     private final Button favoriteButton;
+    private final Menu settingsMenu;
+    private final MenuItem activityNewestItem;
+    private final MenuItem activityOldestItem;
+    private final MenuItem nameAscendingItem;
+    private final MenuItem nameDescendingItem;
+    private final MenuItem hierarchyItem;
     private final Text search;
     private final Image branchImage;
     private final Image currentBranchImage;
@@ -85,7 +105,7 @@ final class BranchPicker
     private final Preferences preferences;
     private final Consumer<Choice> onSelect;
     private final Runnable onActivate;
-    private final String currentBranch;
+    private String currentBranch;
     private final boolean includeTags;
     private Choice selected;
     private final BranchPickerIndex branchIndex = new BranchPickerIndex();
@@ -94,9 +114,11 @@ final class BranchPicker
     private boolean localLoading = true;
     private boolean remoteLoading;
     private boolean tagsLoading;
+    private SortOrder sortOrder = SortOrder.ACTIVITY_NEWEST_FIRST;
     private String localLoadError;
     private String remoteLoadError;
     private String tagLoadError;
+    private final Menu contextMenu;
 
     BranchPicker(Composite parent, Repository repository, boolean includeRemote,
         Consumer<Choice> onSelect, Runnable onActivate) throws IOException
@@ -109,10 +131,13 @@ final class BranchPicker
     {
         this.onSelect = onSelect;
         this.onActivate = onActivate;
+        this.repository = repository;
+        this.includeRemote = includeRemote;
         this.includeTags = includeTags;
         remoteLoading = includeRemote;
         tagsLoading = includeTags;
         currentBranch = repository.getBranch();
+        BranchHierarchySettings.initialize();
         String id = UUID.nameUUIDFromBytes(repository.getDirectory().getAbsolutePath()
             .getBytes(StandardCharsets.UTF_8)).toString();
         preferences = InstanceScope.INSTANCE.getNode("dev.edt.gitflow.ui").node("favorites").node(id); //$NON-NLS-1$ //$NON-NLS-2$
@@ -124,7 +149,7 @@ final class BranchPicker
             pinnedFolders.addAll(List.of(savedFolders.split("\n"))); //$NON-NLS-1$
         branchIndex.setPinnedFolders(pinnedFolders);
         panel = new Composite(parent, SWT.NONE);
-        panel.setLayout(new GridLayout(2, false));
+        panel.setLayout(new GridLayout(3, false));
         GridData panelData = new GridData(SWT.FILL, SWT.FILL, true, true);
         panelData.horizontalSpan = 2;
         panel.setLayoutData(panelData);
@@ -140,8 +165,37 @@ final class BranchPicker
             favoriteButton.computeSize(SWT.DEFAULT, SWT.DEFAULT).x);
         favoriteButton.setLayoutData(favoriteData);
         favoriteButton.setEnabled(false);
+        Button settingsButton = new Button(panel, SWT.PUSH);
+        settingsButton.setText("⚙"); //$NON-NLS-1$
+        settingsButton.setToolTipText(Messages.get("branchPickerSettings")); //$NON-NLS-1$
+        settingsButton.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false));
+        settingsMenu = new Menu(panel.getShell(), SWT.POP_UP);
+        activityNewestItem = radioMenuItem("sortActivityNewestFirst"); //$NON-NLS-1$
+        activityOldestItem = radioMenuItem("sortActivityOldestFirst"); //$NON-NLS-1$
+        nameAscendingItem = radioMenuItem("sortBranchesAscending"); //$NON-NLS-1$
+        nameDescendingItem = radioMenuItem("sortBranchesDescending"); //$NON-NLS-1$
+        new MenuItem(settingsMenu, SWT.SEPARATOR);
+        hierarchyItem = new MenuItem(settingsMenu, SWT.CHECK);
+        hierarchyItem.setText(Messages.get("branchHierarchyGlobal")); //$NON-NLS-1$
+        activityNewestItem.addListener(SWT.Selection, event -> chooseSortOrder(activityNewestItem,
+            SortOrder.ACTIVITY_NEWEST_FIRST));
+        activityOldestItem.addListener(SWT.Selection, event -> chooseSortOrder(activityOldestItem,
+            SortOrder.ACTIVITY_OLDEST_FIRST));
+        nameAscendingItem.addListener(SWT.Selection, event -> chooseSortOrder(nameAscendingItem,
+            SortOrder.NAME_ASCENDING));
+        nameDescendingItem.addListener(SWT.Selection, event -> chooseSortOrder(nameDescendingItem,
+            SortOrder.NAME_DESCENDING));
+        hierarchyItem.addListener(SWT.Selection, event -> setHierarchyEnabled(hierarchyItem.getSelection()));
+        settingsMenu.addListener(SWT.Show, event -> updateSettingsMenu());
+        settingsButton.addListener(SWT.Selection, event ->
+        {
+            Point location = settingsButton.toDisplay(0, settingsButton.getSize().y);
+            settingsMenu.setLocation(location);
+            settingsMenu.setVisible(true);
+        });
+        panel.addListener(SWT.Dispose, event -> settingsMenu.dispose());
         tree = new Tree(panel, SWT.BORDER | SWT.SINGLE | SWT.V_SCROLL | SWT.H_SCROLL | SWT.FULL_SELECTION);
-        GridData treeData = new GridData(SWT.FILL, SWT.FILL, true, true, 2, 1);
+        GridData treeData = new GridData(SWT.FILL, SWT.FILL, true, true, 3, 1);
         treeData.heightHint = 220;
         treeData.widthHint = 680;
         tree.setLayoutData(treeData);
@@ -178,8 +232,12 @@ final class BranchPicker
             GC gc = event.gc;
             Font originalFont = gc.getFont();
             Color originalColor = gc.getForeground();
-            Color primary = tree.getForeground();
-            Color secondary = tree.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
+            boolean selectedRow = (event.detail & SWT.SELECTED) != 0;
+            boolean lightWindowsSelection = selectedRow && "win32".equals(SWT.getPlatform()); //$NON-NLS-1$
+            boolean activeSelection = selectedRow && tree.isFocusControl() && !lightWindowsSelection;
+            Color primary = activeSelection
+                ? tree.getDisplay().getSystemColor(SWT.COLOR_LIST_SELECTION_TEXT) : tree.getForeground();
+            Color secondary = activeSelection ? primary : tree.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
             try
             {
                 Image icon = item.getImage(0);
@@ -272,8 +330,8 @@ final class BranchPicker
                 item.setExpanded(!item.getExpanded());
         });
         favoriteButton.addListener(SWT.Selection, event -> toggleFavorite());
-        Menu menu = new Menu(tree);
-        tree.setMenu(menu);
+        contextMenu = new Menu(tree);
+        tree.setMenu(contextMenu);
         tree.addListener(SWT.MenuDetect, event ->
         {
             TreeItem item = event.x < 0 || event.y < 0 ? null
@@ -281,21 +339,33 @@ final class BranchPicker
             if ((event.x < 0 || event.y < 0) && tree.getSelectionCount() == 1)
                 item = tree.getSelection()[0];
             if (item != null && item.getData() instanceof Folder folder && folder.remote())
+            {
                 tree.setData("contextFolder", folder); //$NON-NLS-1$
+                tree.setData("contextChoice", null); //$NON-NLS-1$
+            }
+            else if (item != null && item.getData() instanceof Choice choice)
+            {
+                tree.setData("contextFolder", null); //$NON-NLS-1$
+                tree.setData("contextChoice", choice); //$NON-NLS-1$
+            }
             else
                 event.doit = false;
         });
-        menu.addListener(SWT.Show, event ->
+        contextMenu.addListener(SWT.Show, event ->
         {
-            for (MenuItem item : menu.getItems())
+            for (MenuItem item : contextMenu.getItems())
                 item.dispose();
-            if (!(tree.getData("contextFolder") instanceof Folder folder)) //$NON-NLS-1$
+            if (tree.getData("contextFolder") instanceof Folder folder) //$NON-NLS-1$
+            {
+                tree.setData("contextFolder", null); //$NON-NLS-1$
+                MenuItem pin = new MenuItem(contextMenu, SWT.PUSH);
+                pin.setText(Messages.get(pinnedFolders.contains(folder.path())
+                    ? "unpinFolder" : "pinFolder")); //$NON-NLS-1$ //$NON-NLS-2$
+                pin.addListener(SWT.Selection, click -> toggleFolder(folder.path()));
                 return;
-            tree.setData("contextFolder", null); //$NON-NLS-1$
-            MenuItem pin = new MenuItem(menu, SWT.PUSH);
-            pin.setText(Messages.get(pinnedFolders.contains(folder.path())
-                ? "unpinFolder" : "pinFolder")); //$NON-NLS-1$ //$NON-NLS-2$
-            pin.addListener(SWT.Selection, click -> toggleFolder(folder.path()));
+            }
+            if (tree.getData("contextChoice") instanceof Choice choice) //$NON-NLS-1$
+                showBranchMenu(choice);
         });
         rebuild();
         load(repository, includeRemote);
@@ -506,6 +576,195 @@ final class BranchPicker
         rebuild();
     }
 
+    private void showBranchMenu(Choice choice)
+    {
+        menuItem(contextMenu, Messages.get("copyBranchName"), //$NON-NLS-1$
+            () -> copyToClipboard(choice.name()));
+        if (choice.kind() == Kind.TAG)
+            return;
+        new MenuItem(contextMenu, SWT.SEPARATOR);
+        if (choice.remote())
+        {
+            menuItem(contextMenu, Messages.get("checkoutRemoteBranch"), () -> checkout(choice)); //$NON-NLS-1$
+            menuItem(contextMenu, Messages.get("renameRemoteBranch"), () -> renameRemote(choice)); //$NON-NLS-1$
+            return;
+        }
+        if (choice.name().equals(currentBranch))
+        {
+            menuItem(contextMenu, Messages.get("pullBranch"), () -> schedulePull()); //$NON-NLS-1$
+            menuItem(contextMenu, Messages.get("pushBranch"), () -> schedulePush()); //$NON-NLS-1$
+        }
+        else
+        {
+            menuItem(contextMenu, Messages.get("checkoutBranch"), () -> checkout(choice)); //$NON-NLS-1$
+            menuItem(contextMenu, Messages.get("renameBranch"), () -> rename(choice)); //$NON-NLS-1$
+            menuItem(contextMenu, Messages.get("deleteBranch"), () -> delete(choice)); //$NON-NLS-1$
+        }
+    }
+
+    private static MenuItem menuItem(Menu menu, String title, Runnable action)
+    {
+        MenuItem item = new MenuItem(menu, SWT.PUSH);
+        item.setText(title);
+        item.addListener(SWT.Selection, event -> action.run());
+        return item;
+    }
+
+    private void copyToClipboard(String text)
+    {
+        Clipboard clipboard = new Clipboard(tree.getDisplay());
+        try
+        {
+            clipboard.setContents(new Object[] { text }, new Transfer[] { TextTransfer.getInstance() });
+        }
+        finally
+        {
+            clipboard.dispose();
+        }
+    }
+
+    private void checkout(Choice choice)
+    {
+        String localName = choice.localName();
+        boolean create = choice.remote() && !choice.localExists();
+        OperationJob.schedule(repository, tree.getShell(), Messages.get("checkoutTitle"), //$NON-NLS-1$
+            (selectedRepository, monitor) -> BranchOperations.checkout(selectedRepository, localName, create,
+                create ? choice.ref() : null, monitor), null,
+            result -> refreshAfter(result));
+    }
+
+    private void schedulePull()
+    {
+        OperationJob.schedule(repository, tree.getShell(), Messages.get("pullBranch"), //$NON-NLS-1$
+            PullOperations::smartPull, null, this::refreshAfter);
+    }
+
+    private void schedulePush()
+    {
+        OperationJob.schedule(repository, tree.getShell(), Messages.get("pushBranch"), //$NON-NLS-1$
+            PullOperations::smartPush, null, this::refreshAfter);
+    }
+
+    private void rename(Choice choice)
+    {
+        InputDialog dialog = new InputDialog(tree.getShell(), Messages.get("renameBranch"), //$NON-NLS-1$
+            Messages.get("renameBranchPrompt"), choice.name(), value -> //$NON-NLS-1$
+                BranchOperations.isValidBranchName(value) ? null : Messages.get("invalidBranch")); //$NON-NLS-1$
+        if (dialog.open() != Window.OK)
+            return;
+        String newName = dialog.getValue();
+        BranchOperations.RemoteRename remoteTarget = BranchOperations.remoteRenameTarget(repository,
+            choice.name(), newName);
+        String confirmation = remoteTarget == null
+            ? MessageFormat.format(Messages.get("renameBranchConfirm"), choice.name(), newName) //$NON-NLS-1$
+            : MessageFormat.format(Messages.get("renameBranchConfirmRemote"), choice.name(), newName); //$NON-NLS-1$
+        if (!MessageDialog.openConfirm(tree.getShell(), Messages.get("renameBranch"), confirmation)) //$NON-NLS-1$
+            return;
+        if (remoteTarget == null)
+            OperationJob.schedule(repository, tree.getShell(), Messages.get("renameBranch"), //$NON-NLS-1$
+                (selectedRepository, monitor) -> BranchOperations.rename(selectedRepository, choice.name(), newName,
+                    monitor), null, this::refreshAfter);
+        else
+            OperationJob.schedule(repository, tree.getShell(), Messages.get("renameBranch"), //$NON-NLS-1$
+                (selectedRepository, monitor) -> BranchOperations.renameWithRemote(selectedRepository,
+                    choice.name(), newName, remoteTarget, monitor), null, this::refreshAfterRemoteRename);
+    }
+
+    private void renameRemote(Choice choice)
+    {
+        String remote = branchIndex.remoteName(choice.ref());
+        if (remote == null)
+            return;
+        String prefix = Constants.R_REMOTES + remote + "/"; //$NON-NLS-1$
+        String oldName = choice.ref().substring(prefix.length());
+        InputDialog dialog = new InputDialog(tree.getShell(), Messages.get("renameRemoteBranch"), //$NON-NLS-1$
+            Messages.get("renameRemoteBranchPrompt"), oldName, value -> //$NON-NLS-1$
+                BranchOperations.isValidBranchName(value) ? null : Messages.get("invalidBranch")); //$NON-NLS-1$
+        if (dialog.open() != Window.OK)
+            return;
+        String newName = dialog.getValue();
+        String prompt = MessageFormat.format(Messages.get("renameRemoteBranchConfirm"), //$NON-NLS-1$
+            remote + "/" + oldName, remote + "/" + newName); //$NON-NLS-1$
+        if (!MessageDialog.openConfirm(tree.getShell(), Messages.get("renameRemoteBranch"), prompt)) //$NON-NLS-1$
+            return;
+        OperationJob.schedule(repository, tree.getShell(), Messages.get("renameRemoteBranch"), //$NON-NLS-1$
+            (selectedRepository, monitor) -> BranchOperations.renameRemoteReference(selectedRepository,
+                remote, oldName, newName, monitor), null, result ->
+                {
+                    if (result.succeeded())
+                        migrateFavorite(choice.ref(), Constants.R_REMOTES + remote + "/" + newName); //$NON-NLS-1$
+                    refreshAfterRemoteRename(result);
+                });
+    }
+
+    private void migrateFavorite(String oldRef, String newRef)
+    {
+        if (!favorites.remove(oldRef))
+            return;
+        favorites.add(newRef);
+        saveFavorites();
+    }
+
+    private void saveFavorites()
+    {
+        preferences.put("refs", String.join("\n", favorites)); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            preferences.flush();
+        }
+        catch (BackingStoreException e)
+        {
+            MessageDialog.openError(tree.getShell(), Messages.get("title"), //$NON-NLS-1$
+                Messages.get("favoriteSaveFailed") + " " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    private void delete(Choice choice)
+    {
+        OperationJob.schedule(repository, tree.getShell(), Messages.get("deleteBranch"), //$NON-NLS-1$
+            (selectedRepository, monitor) -> BranchOperations.delete(selectedRepository, choice.name(), false,
+                monitor),
+            (selectedRepository, monitor) -> BranchOperations.delete(selectedRepository, choice.name(), true,
+                monitor), this::refreshAfter);
+    }
+
+    private void refreshAfter(OperationResult result)
+    {
+        if (!result.succeeded() || panel.isDisposed())
+            return;
+        refreshBranches();
+    }
+
+    private void refreshAfterRemoteRename(OperationResult result)
+    {
+        if (!panel.isDisposed())
+            refreshBranches();
+    }
+
+    private void refreshBranches()
+    {
+        branches.clear();
+        favoriteChoices.clear();
+        choicesByRef.clear();
+        branchIndex.clear();
+        localLoadError = null;
+        remoteLoadError = null;
+        tagLoadError = null;
+        localLoading = true;
+        remoteLoading = includeRemote;
+        tagsLoading = includeTags;
+        try
+        {
+            currentBranch = repository.getBranch();
+        }
+        catch (IOException e)
+        {
+            currentBranch = ""; //$NON-NLS-1$
+        }
+        rebuild();
+        load(repository, includeRemote);
+    }
+
     private void updateFavoriteButton()
     {
         favoriteButton.setText(Messages.get(selected != null && favorites.contains(selected.ref())
@@ -524,12 +783,14 @@ final class BranchPicker
         {
             String selectedRef = selected == null ? null : selected.ref();
             tree.removeAll();
+            updateSettingsMenu();
+            boolean hierarchyEnabled = BranchHierarchySettings.isEnabled();
             String query = search.getText().trim().toLowerCase(Locale.ROOT);
             TreeItem starred = root(Messages.get("favorites")); //$NON-NLS-1$
             TreeItem local = root(Messages.get("localBranches")); //$NON-NLS-1$
             TreeItem remote = root(Messages.get("remoteBranches")); //$NON-NLS-1$
             TreeItem tags = includeTags ? root(Messages.get("tags")) : null; //$NON-NLS-1$
-            for (Choice branch : favoriteChoices)
+            for (Choice branch : sorted(favoriteChoices))
             {
                 TreeItem item = new TreeItem(starred, SWT.NONE);
                 item.setText(rowText("★ " + branch.name(), branch)); //$NON-NLS-1$
@@ -537,12 +798,17 @@ final class BranchPicker
                 item.setData(branch);
                 item.setData("label", "★ " + branch.name()); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            addGroupedBranches(local, choices(branchIndex.filter(BranchPickerIndex.Group.LOCAL, query)),
-                BranchPickerIndex.Group.LOCAL);
-            addRemoteBranches(remote, query);
+            List<Choice> localChoices = choices(branchIndex.filter(BranchPickerIndex.Group.LOCAL, query));
+            if (hierarchyEnabled)
+                addGroupedBranches(local, localChoices, BranchPickerIndex.Group.LOCAL);
+            else
+                addFlatBranches(local, localChoices);
+            if (hierarchyEnabled)
+                addRemoteBranches(remote, query);
+            else
+                addFlatBranches(remote, choices(branchIndex.filter(BranchPickerIndex.Group.REMOTE, query)));
             if (includeTags)
-                addGroupedBranches(tags, choices(branchIndex.filter(BranchPickerIndex.Group.TAG, query)),
-                    BranchPickerIndex.Group.TAG);
+                addFlatBranches(tags, choices(branchIndex.filter(BranchPickerIndex.Group.TAG, query)));
             if (localLoadError != null)
             {
                 TreeItem status = new TreeItem(local, SWT.NONE);
@@ -597,7 +863,73 @@ final class BranchPicker
 
     private List<Choice> choices(List<BranchPickerIndex.Ref> refs)
     {
-        return refs.stream().map(ref -> choicesByRef.get(ref.ref())).filter(choice -> choice != null).toList();
+        return sorted(refs.stream().map(ref -> choicesByRef.get(ref.ref()))
+            .filter(choice -> choice != null).toList());
+    }
+
+    private List<Choice> sorted(List<Choice> choices)
+    {
+        Comparator<Choice> byName = Comparator
+            .comparing((Choice choice) -> choice.name().toLowerCase(Locale.ROOT)).thenComparing(Choice::name);
+        Comparator<Choice> comparator = switch (sortOrder)
+        {
+            case ACTIVITY_NEWEST_FIRST -> byActivity();
+            case ACTIVITY_OLDEST_FIRST -> Comparator.comparingInt(Choice::lastActivity)
+                .thenComparing(Choice::name);
+            case NAME_ASCENDING -> byName;
+            case NAME_DESCENDING -> byName.reversed();
+        };
+        return choices.stream().sorted(comparator).toList();
+    }
+
+    private void addFlatBranches(TreeItem root, List<Choice> choices)
+    {
+        for (Choice choice : choices)
+        {
+            String label = favorites.contains(choice.ref()) ? "★ " + choice.name() : choice.name(); //$NON-NLS-1$
+            TreeItem item = new TreeItem(root, SWT.NONE);
+            item.setText(rowText(label, choice));
+            setBranchImage(item, choice);
+            item.setData(choice);
+            item.setData("label", label); //$NON-NLS-1$
+        }
+    }
+
+    private MenuItem radioMenuItem(String key)
+    {
+        MenuItem item = new MenuItem(settingsMenu, SWT.RADIO);
+        item.setText(Messages.get(key));
+        return item;
+    }
+
+    private void chooseSortOrder(MenuItem item, SortOrder order)
+    {
+        if (item.getSelection())
+        {
+            sortOrder = order;
+            rebuild();
+        }
+    }
+
+    private void updateSettingsMenu()
+    {
+        activityNewestItem.setSelection(sortOrder == SortOrder.ACTIVITY_NEWEST_FIRST);
+        activityOldestItem.setSelection(sortOrder == SortOrder.ACTIVITY_OLDEST_FIRST);
+        nameAscendingItem.setSelection(sortOrder == SortOrder.NAME_ASCENDING);
+        nameDescendingItem.setSelection(sortOrder == SortOrder.NAME_DESCENDING);
+        State state = BranchHierarchySettings.state();
+        hierarchyItem.setSelection(state != null && Boolean.TRUE.equals(state.getValue()));
+        hierarchyItem.setEnabled(state != null);
+    }
+
+    private void setHierarchyEnabled(boolean enabled)
+    {
+        State state = BranchHierarchySettings.state();
+        if (state == null)
+            return;
+        state.setValue(enabled);
+        updateSettingsMenu();
+        rebuild();
     }
 
     private void refreshFavoriteChoices()

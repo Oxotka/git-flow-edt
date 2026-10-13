@@ -28,6 +28,7 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.part.ViewPart;
 
 import dev.edt.gitflow.core.RepositorySupport;
+import dev.edt.gitflow.ui.handlers.BranchHierarchySettings;
 import dev.edt.gitflow.ui.handlers.MergeBranchPickerHook;
 
 public class StagingRepositoryInitializer implements IStartup
@@ -115,6 +116,7 @@ public class StagingRepositoryInitializer implements IStartup
     {
         Display.getDefault().asyncExec(() ->
         {
+            BranchHierarchySettings.initialize();
             MergeBranchPickerHook.install(Display.getDefault());
             for (IWorkbenchWindow window : PlatformUI.getWorkbench().getWorkbenchWindows())
                 watch(window);

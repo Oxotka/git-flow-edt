@@ -86,6 +86,20 @@ public final class BranchPickerIndex
         }
     }
 
+    public void clear()
+    {
+        refsByName.clear();
+        refsByRemote.clear();
+        orderedRemoteNames = List.of();
+        for (Group group : Group.values())
+        {
+            refsByGroup.get(group).clear();
+            folderSets.get(group).clear();
+            orderedFolders.put(group, List.of());
+        }
+        folderPartsByPath.clear();
+    }
+
     public void setPinnedFolders(Collection<String> folders)
     {
         pinnedFolders.clear();
