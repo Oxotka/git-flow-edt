@@ -158,6 +158,8 @@ public class GitFlowView extends ViewPart
     private Image branchImage;
     private Button syncButton;
     private StyledText messageField;
+    private final MessageUndoHistory messageUndoHistory = new MessageUndoHistory();
+    private boolean restoringMessageHistory;
     private RepositoryState repositoryState = RepositoryState.SAFE;
     private String autoFilledMergeMessage;
     private boolean mergeMessageEdited;
@@ -267,21 +269,35 @@ public class GitFlowView extends ViewPart
                 generate.addListener(SWT.Selection, selectionEvent -> generateCommitMessage());
                 new MenuItem(menu, SWT.SEPARATOR);
             }
+            MenuItem undo = messageMenuItem(menu, "undo", () -> changeMessageHistory(true)); //$NON-NLS-1$
+            undo.setAccelerator(SWT.MOD1 | 'z');
+            MenuItem redo = messageMenuItem(menu, "redo", () -> changeMessageHistory(false)); //$NON-NLS-1$
+            boolean mac = "cocoa".equals(SWT.getPlatform()); //$NON-NLS-1$
+            redo.setAccelerator(SWT.MOD1 | (mac ? SWT.SHIFT : 0) | (mac ? 'z' : 'y'));
+            new MenuItem(menu, SWT.SEPARATOR);
             MenuItem cut = messageMenuItem(menu, "cut", messageField::cut); //$NON-NLS-1$
+            cut.setAccelerator(SWT.MOD1 | 'x');
             MenuItem copy = messageMenuItem(menu, "copy", messageField::copy); //$NON-NLS-1$
+            copy.setAccelerator(SWT.MOD1 | 'c');
             MenuItem paste = messageMenuItem(menu, "paste", messageField::paste); //$NON-NLS-1$
+            paste.setAccelerator(SWT.MOD1 | 'v');
+            new MenuItem(menu, SWT.SEPARATOR);
             MenuItem delete = messageMenuItem(menu, "delete", () -> //$NON-NLS-1$
             {
                 Point range = messageField.getSelection();
                 messageField.replaceTextRange(range.x, range.y - range.x, ""); //$NON-NLS-1$
             });
+            delete.setAccelerator(SWT.DEL);
             MenuItem selectAll = messageMenuItem(menu, "selectAll", messageField::selectAll); //$NON-NLS-1$
+            selectAll.setAccelerator(SWT.MOD1 | 'a');
             cut.setEnabled(hasSelection && messageField.getEditable());
             copy.setEnabled(hasSelection);
             paste.setEnabled(messageField.getEditable() && clipboardHasText());
             delete.setEnabled(hasSelection && messageField.getEditable());
             selectAll.setEnabled(messageField.getCharCount() > 0
                 && (selection.x != 0 || selection.y != messageField.getCharCount()));
+            undo.setEnabled(messageField.getEditable() && messageUndoHistory.canUndo());
+            redo.setEnabled(messageField.getEditable() && messageUndoHistory.canRedo());
 
             Display display = messageField.getDisplay();
             menu.addListener(SWT.Hide, hideEvent -> display.asyncExec(() ->
@@ -301,6 +317,44 @@ public class GitFlowView extends ViewPart
         item.setText(Messages.get(key));
         item.addListener(SWT.Selection, event -> action.run());
         return item;
+    }
+
+    private void changeMessageHistory(boolean undo)
+    {
+        if (messageField == null || messageField.isDisposed())
+            return;
+        Point selection = messageField.getSelection();
+        MessageUndoHistory.State current = new MessageUndoHistory.State(messageField.getText(), selection.x, selection.y);
+        MessageUndoHistory.State state = undo ? messageUndoHistory.undo(current) : messageUndoHistory.redo(current);
+        if (state == null)
+            return;
+        restoringMessageHistory = true;
+        try
+        {
+            messageField.setText(state.text());
+            messageField.setSelection(state.selectionStart(), state.selectionEnd());
+        }
+        finally
+        {
+            restoringMessageHistory = false;
+        }
+        updateCommitMessageStyle();
+        updateCommitAvailability();
+        syncStagingMessage(true);
+    }
+
+    private void setCommitMessageText(String text)
+    {
+        restoringMessageHistory = true;
+        try
+        {
+            messageField.setText(text);
+        }
+        finally
+        {
+            restoringMessageHistory = false;
+        }
+        messageUndoHistory.clear();
     }
 
     private boolean clipboardHasText()
@@ -393,7 +447,7 @@ public class GitFlowView extends ViewPart
         if (highlightCommitSubject && lineBreak >= 0 && lineBreak + 1 < editorMessage.length()
             && editorMessage.charAt(lineBreak + 1) == '\n')
             editorMessage = editorMessage.substring(0, lineBreak + 1) + editorMessage.substring(lineBreak + 2);
-        messageField.setText(editorMessage);
+        setCommitMessageText(editorMessage);
         lineBreak = editorMessage.indexOf('\n');
         messageField.setSelection(lineBreak < 0 ? editorMessage.length() : lineBreak);
         messageField.setFocus();
@@ -442,7 +496,6 @@ public class GitFlowView extends ViewPart
         syncButton.setText("↻"); //$NON-NLS-1$
         syncButton.setToolTipText(Messages.get("fetchHint")); //$NON-NLS-1$
         syncButton.addListener(SWT.Selection, event -> runAdaptiveSync());
-
         repositoryCombo = new Combo(parent, SWT.DROP_DOWN | SWT.READ_ONLY);
         repositoryCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         repositoryCombo.addListener(SWT.Selection, event -> selectRepository(selectedRepository()));
@@ -512,6 +565,14 @@ public class GitFlowView extends ViewPart
         messageData.heightHint = messageField.getLineHeight() * 2 + 8;
         messageField.setLayoutData(messageData);
         messageField.setToolTipText(Messages.get("commitShortcutHint")); //$NON-NLS-1$
+        messageField.addVerifyListener(event ->
+        {
+            if (!restoringMessageHistory && (event.start != event.end || !event.text.isEmpty()))
+            {
+                Point selection = messageField.getSelection();
+                messageUndoHistory.record(new MessageUndoHistory.State(messageField.getText(), selection.x, selection.y));
+            }
+        });
         messageField.addModifyListener(event ->
         {
             updateCommitMessageStyle();
@@ -523,6 +584,20 @@ public class GitFlowView extends ViewPart
         installMessageContextMenu();
         messageField.addListener(SWT.KeyDown, event ->
         {
+            boolean modifier = (event.stateMask & SWT.MOD1) != 0;
+            boolean mac = "cocoa".equals(SWT.getPlatform()); //$NON-NLS-1$
+            if (modifier && (event.keyCode == 'z' || event.keyCode == 'Z'))
+            {
+                event.doit = false;
+                changeMessageHistory((event.stateMask & SWT.SHIFT) == 0);
+                return;
+            }
+            if (modifier && !mac && (event.keyCode == 'y' || event.keyCode == 'Y'))
+            {
+                event.doit = false;
+                changeMessageHistory(false);
+                return;
+            }
             if (event.keyCode == SWT.CR && (event.stateMask & SWT.MOD1) != 0)
             {
                 event.doit = false;
@@ -1245,7 +1320,7 @@ public class GitFlowView extends ViewPart
                     view.getClass().getMethod("setCommitText", String.class).invoke(view, messageField.getText()); //$NON-NLS-1$
             }
             else if (!messageField.getText().equals(text.getText()))
-                messageField.setText(text.getText());
+                setCommitMessageText(text.getText());
         }
         catch (ReflectiveOperationException e)
         {
@@ -1551,7 +1626,7 @@ public class GitFlowView extends ViewPart
             historyReader = null;
             if (autoFilledMergeMessage != null
                 && messageField.getText().equals(autoFilledMergeMessage))
-                messageField.setText(""); //$NON-NLS-1$
+                setCommitMessageText(""); //$NON-NLS-1$
             autoFilledMergeMessage = null;
             mergeMessageEdited = false;
             repositoryState = RepositoryState.SAFE;
@@ -2189,7 +2264,7 @@ public class GitFlowView extends ViewPart
             if (!messageField.getText().equals(text))
             {
                 settingMergeMessage = true;
-                messageField.setText(text);
+                setCommitMessageText(text);
                 settingMergeMessage = false;
             }
             autoFilledMergeMessage = messageField.getText();
@@ -2200,7 +2275,7 @@ public class GitFlowView extends ViewPart
                 && messageField.getText().equals(autoFilledMergeMessage))
             {
                 settingMergeMessage = true;
-                messageField.setText(""); //$NON-NLS-1$
+                setCommitMessageText(""); //$NON-NLS-1$
                 settingMergeMessage = false;
             }
             autoFilledMergeMessage = null;
@@ -2817,7 +2892,7 @@ public class GitFlowView extends ViewPart
                         autoFilledMergeMessage = null;
                         mergeMessageEdited = false;
                         settingMergeMessage = true;
-                        messageField.setText(""); //$NON-NLS-1$
+                        setCommitMessageText(""); //$NON-NLS-1$
                         settingMergeMessage = false;
                     }
                 });
