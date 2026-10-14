@@ -1,6 +1,8 @@
 package dev.edt.gitflow.core;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -15,10 +17,20 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.diff.DiffEntry;
+import org.eclipse.jgit.diff.DiffFormatter;
+import org.eclipse.jgit.diff.RawTextComparator;
 import org.eclipse.jgit.events.WorkingTreeModifiedEvent;
 import org.eclipse.jgit.lib.Constants;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.RepositoryState;
+import org.eclipse.jgit.dircache.DirCacheIterator;
+import org.eclipse.jgit.treewalk.AbstractTreeIterator;
+import org.eclipse.jgit.treewalk.CanonicalTreeParser;
+import org.eclipse.jgit.treewalk.EmptyTreeIterator;
+import org.eclipse.jgit.treewalk.FileTreeIterator;
 import org.eclipse.jgit.treewalk.TreeWalk;
 
 import dev.edt.gitflow.core.OperationResult.Kind;
@@ -44,6 +56,45 @@ public record WorkingChanges(List<FileChange> staged, List<FileChange> unstaged)
         staged.sort(Comparator.comparing(FileChange::path));
         unstaged.sort(Comparator.comparing(FileChange::path));
         return new WorkingChanges(List.copyOf(staged), List.copyOf(unstaged));
+    }
+
+    public static String diffForCommitMessage(Repository repository) throws IOException, GitAPIException
+    {
+        WorkingChanges changes = read(repository);
+        boolean useIndex = !changes.staged().isEmpty();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (DiffFormatter formatter = new DiffFormatter(output))
+        {
+            formatter.setRepository(repository);
+            formatter.setDiffComparator(RawTextComparator.DEFAULT);
+            formatter.setDetectRenames(true);
+            AbstractTreeIterator oldTree;
+            AbstractTreeIterator newTree;
+            if (useIndex)
+            {
+                ObjectId headTree = repository.resolve(Constants.HEAD + "^{tree}"); //$NON-NLS-1$
+                if (headTree == null)
+                    oldTree = new EmptyTreeIterator();
+                else
+                {
+                    CanonicalTreeParser parser = new CanonicalTreeParser();
+                    try (ObjectReader reader = repository.newObjectReader())
+                    {
+                        parser.reset(reader, headTree);
+                    }
+                    oldTree = parser;
+                }
+                newTree = new DirCacheIterator(repository.readDirCache());
+            }
+            else
+            {
+                oldTree = new DirCacheIterator(repository.readDirCache());
+                newTree = new FileTreeIterator(repository);
+            }
+            for (DiffEntry entry : formatter.scan(oldTree, newTree))
+                formatter.format(entry);
+        }
+        return output.toString(StandardCharsets.UTF_8);
     }
 
     private static void add(List<FileChange> files, Iterable<String> paths, String state)

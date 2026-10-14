@@ -2,6 +2,8 @@ package dev.edt.gitflow.ui.views;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.URL;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -248,6 +250,162 @@ public class GitFlowView extends ViewPart
         return found[0];
     }
 
+    private void installMessageContextMenu()
+    {
+        messageField.addListener(SWT.MenuDetect, event ->
+        {
+            Point selection = messageField.getSelection();
+            boolean hasSelection = selection.x != selection.y;
+
+            Menu menu = new Menu(messageField);
+            boolean workmateAvailable = isWorkmateAvailable();
+            if (workmateAvailable)
+            {
+                MenuItem generate = new MenuItem(menu, SWT.PUSH);
+                generate.setText(Messages.get("generateCommitMessage")); //$NON-NLS-1$
+                generate.setEnabled(selectedRepository() != null && canGenerateCommitMessage());
+                generate.addListener(SWT.Selection, selectionEvent -> generateCommitMessage());
+                new MenuItem(menu, SWT.SEPARATOR);
+            }
+            MenuItem cut = messageMenuItem(menu, "cut", messageField::cut); //$NON-NLS-1$
+            MenuItem copy = messageMenuItem(menu, "copy", messageField::copy); //$NON-NLS-1$
+            MenuItem paste = messageMenuItem(menu, "paste", messageField::paste); //$NON-NLS-1$
+            MenuItem delete = messageMenuItem(menu, "delete", () -> //$NON-NLS-1$
+            {
+                Point range = messageField.getSelection();
+                messageField.replaceTextRange(range.x, range.y - range.x, ""); //$NON-NLS-1$
+            });
+            MenuItem selectAll = messageMenuItem(menu, "selectAll", messageField::selectAll); //$NON-NLS-1$
+            cut.setEnabled(hasSelection && messageField.getEditable());
+            copy.setEnabled(hasSelection);
+            paste.setEnabled(messageField.getEditable() && clipboardHasText());
+            delete.setEnabled(hasSelection && messageField.getEditable());
+            selectAll.setEnabled(messageField.getCharCount() > 0
+                && (selection.x != 0 || selection.y != messageField.getCharCount()));
+
+            Display display = messageField.getDisplay();
+            menu.addListener(SWT.Hide, hideEvent -> display.asyncExec(() ->
+            {
+                if (!menu.isDisposed())
+                    menu.dispose();
+            }));
+            menu.setLocation(event.x, event.y);
+            menu.setVisible(true);
+            event.doit = false;
+        });
+    }
+
+    private MenuItem messageMenuItem(Menu menu, String key, Runnable action)
+    {
+        MenuItem item = new MenuItem(menu, SWT.PUSH);
+        item.setText(Messages.get(key));
+        item.addListener(SWT.Selection, event -> action.run());
+        return item;
+    }
+
+    private boolean clipboardHasText()
+    {
+        Clipboard clipboard = new Clipboard(messageField.getDisplay());
+        try
+        {
+            return clipboard.getContents(TextTransfer.getInstance()) instanceof String;
+        }
+        finally
+        {
+            clipboard.dispose();
+        }
+    }
+
+    private boolean isWorkmateAvailable()
+    {
+        if (Platform.getBundle("com.e1c.edt.ai.ui") == null //$NON-NLS-1$
+            || Platform.getBundle("com.e1c.edt.ai.ui.common") == null) //$NON-NLS-1$
+            return false;
+        try
+        {
+            Class<?> generator = Class.forName(
+                "dev.edt.gitflow.ui.views.WorkmateCommitMessageGenerator", true, getClass().getClassLoader()); //$NON-NLS-1$
+            return Boolean.TRUE.equals(generator.getMethod("isAvailable").invoke(null)); //$NON-NLS-1$
+        }
+        catch (ReflectiveOperationException | LinkageError e)
+        {
+            return false;
+        }
+    }
+
+    private void generateCommitMessage()
+    {
+        Repository repository = selectedRepository();
+        if (repository == null || !canGenerateCommitMessage())
+            return;
+        String userText = messageField.getText();
+        try
+        {
+            Class<?> generator = Class.forName(
+                "dev.edt.gitflow.ui.views.WorkmateCommitMessageGenerator", true, getClass().getClassLoader()); //$NON-NLS-1$
+            Method generate = generator.getMethod("generate", Repository.class, String.class, //$NON-NLS-1$
+                java.util.function.BiConsumer.class);
+            generate.invoke(null, repository, userText,
+                (java.util.function.BiConsumer<String, String>) (message, error) ->
+                    generatedCommitMessage(repository, userText, message, error));
+        }
+        catch (InvocationTargetException e)
+        {
+            showCommitMessageGenerationError(e.getCause());
+        }
+        catch (ReflectiveOperationException | LinkageError e)
+        {
+            showCommitMessageGenerationError(e);
+        }
+    }
+
+    private boolean canGenerateCommitMessage()
+    {
+        return !changes.staged().isEmpty() || smartCommit && !changes.unstaged().isEmpty();
+    }
+
+    private void generatedCommitMessage(Repository repository, String requestedText, String message, String error)
+    {
+        if (messageField == null || messageField.isDisposed())
+            return;
+        if (!sameRepository(selectedRepository(), repository))
+        {
+            publish(Messages.get("generateCommitMessageRepositoryChanged")); //$NON-NLS-1$
+            return;
+        }
+        if (error != null)
+        {
+            MessageDialog.openError(getSite().getShell(), Messages.get("generateCommitMessageFailed"), error); //$NON-NLS-1$
+            return;
+        }
+        if (message == null || message.isBlank())
+        {
+            MessageDialog.openError(getSite().getShell(), Messages.get("generateCommitMessageFailed"), //$NON-NLS-1$
+                Messages.get("operationFailedShort")); //$NON-NLS-1$
+            return;
+        }
+        if (!messageField.getText().equals(requestedText)
+            && !MessageDialog.openQuestion(getSite().getShell(), Messages.get("generateCommitMessage"),
+                Messages.get("generateCommitMessageReplaceChanged"))) //$NON-NLS-1$
+            return;
+        String editorMessage = message.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        int lineBreak = editorMessage.indexOf('\n');
+        if (highlightCommitSubject && lineBreak >= 0 && lineBreak + 1 < editorMessage.length()
+            && editorMessage.charAt(lineBreak + 1) == '\n')
+            editorMessage = editorMessage.substring(0, lineBreak + 1) + editorMessage.substring(lineBreak + 2);
+        messageField.setText(editorMessage);
+        lineBreak = editorMessage.indexOf('\n');
+        messageField.setSelection(lineBreak < 0 ? editorMessage.length() : lineBreak);
+        messageField.setFocus();
+    }
+
+    private void showCommitMessageGenerationError(Throwable error)
+    {
+        String detail = error == null || error.getMessage() == null
+            ? Messages.get("operationFailedShort") : error.getMessage(); //$NON-NLS-1$
+        MessageDialog.openError(getSite().getShell(), Messages.get("generateCommitMessageFailed"), detail); //$NON-NLS-1$
+    }
+
     @Override
     public void createPartControl(Composite parent)
     {
@@ -362,6 +520,7 @@ public class GitFlowView extends ViewPart
             updateCommitAvailability();
             syncStagingMessage(true);
         });
+        installMessageContextMenu();
         messageField.addListener(SWT.KeyDown, event ->
         {
             if (event.keyCode == SWT.CR && (event.stateMask & SWT.MOD1) != 0)
