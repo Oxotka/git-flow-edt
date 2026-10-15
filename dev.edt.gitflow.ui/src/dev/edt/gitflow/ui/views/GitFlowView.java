@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.ResourceBundle;
 import java.util.Set;
 
 import org.eclipse.core.resources.IFile;
@@ -134,6 +135,8 @@ import org.eclipse.egit.core.op.TagOperation;
 import org.eclipse.egit.core.internal.credentials.EGitCredentialsProvider;
 import org.eclipse.egit.ui.internal.push.PushTagsWizard;
 
+import dev.edt.gitflow.ui.views.ChangePathFormatter.ChangeDisplay;
+
 public class GitFlowView extends ViewPart
 {
     private static final int COMMIT_SUBJECT_LIMIT = 72;
@@ -149,6 +152,14 @@ public class GitFlowView extends ViewPart
 
     private final List<Repository> repositories = new ArrayList<>();
     private final Map<String, Image> metadataImages = new HashMap<>();
+    private final MetadataIconLookup metadataIcons = new MetadataIconLookup(name ->
+    {
+        var bundle = Platform.getBundle("com._1c.g5.v8.dt.md.ui.shared"); //$NON-NLS-1$
+        return bundle == null ? null : bundle.getEntry("icons/obj16/" + name + ".png"); //$NON-NLS-1$ //$NON-NLS-2$
+    });
+    private final ChangePathFormatter changePathFormatter = new ChangePathFormatter(
+        ResourceBundle.getBundle("dev.edt.gitflow.ui.handlers.messages"), //$NON-NLS-1$
+        name -> metadataImage(name) != null);
     private final Deque<PendingIndexChange> queuedIndexChanges = new ArrayDeque<>();
     private final RepositorySelection selectionProvider = new RepositorySelection();
     private final ISelectionListener selectionListener = this::selectionChanged;
@@ -169,15 +180,9 @@ public class GitFlowView extends ViewPart
     private Button historyButton;
     private Tree changesTree;
     private RecentHistoryPane historyPane;
-    private ObjectId historyHead;
-    private String historyStateKey;
-    private RecentHistory.Reader historyReader;
-    private final List<RecentHistory.Entry> historyEntries = new ArrayList<>();
-    private boolean historyHasMore;
-    private boolean historyLoading;
+    private final HistoryPages historyPages = new HistoryPages();
     private HistorySearchSession historySearchSession;
     private Job historySearchJob;
-    private String historySearchRevealHash;
     private boolean stagedExpanded = true;
     private boolean unstagedExpanded = true;
     private boolean hasStashedChanges;
@@ -1227,7 +1232,7 @@ public class GitFlowView extends ViewPart
         historyItem(menu, "Создать метку…", () -> createTagAt(repository, entry.hash())); //$NON-NLS-1$
         historyItem(menu, "Скопировать коммит (cherry-pick)", () -> cherryPick(repository, entry)); //$NON-NLS-1$
         new MenuItem(menu, SWT.SEPARATOR);
-        if (historyHead != null && entry.hash().equals(historyHead.name()))
+        if (historyPages.head() != null && entry.hash().equals(historyPages.head().name()))
         {
             historyItem(menu, Messages.get("mergeBranch"), () -> mergeBranch(repository)) //$NON-NLS-1$
                 .setEnabled(!isRunning(repository));
@@ -1622,8 +1627,7 @@ public class GitFlowView extends ViewPart
         if (!Objects.equals(directory, displayedDirectory))
         {
             cancelHistorySearch();
-            closeHistoryReader(historyReader);
-            historyReader = null;
+            historyPages.clear();
             if (autoFilledMergeMessage != null
                 && messageField.getText().equals(autoFilledMergeMessage))
                 setCommitMessageText(""); //$NON-NLS-1$
@@ -1638,11 +1642,6 @@ public class GitFlowView extends ViewPart
             overviewUpstream = null;
             changes = new WorkingChanges(List.of(), List.of());
             hasStashedChanges = false;
-            historyHead = null;
-            historyEntries.clear();
-            historyHasMore = false;
-            historyLoading = false;
-            historyStateKey = null;
             historyPane.setCommits(List.of(), false, null);
             movedPath = null;
             fillChangesTree();
@@ -1737,7 +1736,7 @@ public class GitFlowView extends ViewPart
         if (!sameRepository(selectedRepository(), repository) || isRunning(repository)
             || changesAwaitingRefresh)
             return;
-        WorkingChanges latestChanges = changesFrom(data);
+        WorkingChanges latestChanges = WorkingChanges.fromIndexDiff(data);
         if (!changes.equals(latestChanges))
         {
             changes = latestChanges;
@@ -1748,28 +1747,6 @@ public class GitFlowView extends ViewPart
             updatePrimary();
         }
         scheduleIndexRefresh(0, latestChanges);
-    }
-
-    private static WorkingChanges changesFrom(IndexDiffData data)
-    {
-        List<FileChange> staged = new ArrayList<>();
-        List<FileChange> unstaged = new ArrayList<>();
-        addChanges(staged, data.getAdded(), "A"); //$NON-NLS-1$
-        addChanges(staged, data.getChanged(), "M"); //$NON-NLS-1$
-        addChanges(staged, data.getRemoved(), "D"); //$NON-NLS-1$
-        addChanges(unstaged, data.getModified(), "M"); //$NON-NLS-1$
-        addChanges(unstaged, data.getMissing(), "D"); //$NON-NLS-1$
-        addChanges(unstaged, data.getUntracked(), "U"); //$NON-NLS-1$
-        addChanges(unstaged, data.getConflicting(), "C"); //$NON-NLS-1$
-        staged.sort(Comparator.comparing(FileChange::path));
-        unstaged.sort(Comparator.comparing(FileChange::path));
-        return new WorkingChanges(List.copyOf(staged), List.copyOf(unstaged));
-    }
-
-    private static void addChanges(List<FileChange> changes, Iterable<String> paths, String state)
-    {
-        for (String path : paths)
-            changes.add(new FileChange(path, state));
     }
 
     private static final long REFRESH_DELAY = 300;
@@ -1806,8 +1783,7 @@ public class GitFlowView extends ViewPart
         Repository repository = selectedRepository();
         if (repository == null || RUNNING.containsKey(repository.getDirectory()))
             return;
-        ObjectId displayedHead = historyHead;
-        String displayedHistoryState = historyStateKey;
+        String displayedHistoryState = historyPages.stateKey();
         ObjectId displayedOverviewHead = overviewHead;
         ObjectId displayedOverviewUpstream = overviewUpstream;
         RepositoryOverview displayedOverview = overview;
@@ -1823,7 +1799,7 @@ public class GitFlowView extends ViewPart
                 {
                     WorkingChanges latestChanges = cachedChanges != null ? cachedChanges
                         : displayedIndexDiff == null ? WorkingChanges.read(repository)
-                            : changesFrom(displayedIndexDiff);
+                            : WorkingChanges.fromIndexDiff(displayedIndexDiff);
                     boolean latestHasStashedChanges = StashOperations.hasStash(repository);
                     RepositoryOverview latestOverview = fullRefresh
                         ? RepositoryOverview.read(repository, latestChanges, displayedOverview,
@@ -1873,15 +1849,8 @@ public class GitFlowView extends ViewPart
                             syncStagingMessage(false);
                             if (history != null)
                             {
-                                closeHistoryReader(historyReader);
-                                historyReader = historyReaderForUi;
-                                historyHead = head;
-                                historyStateKey = historyState;
-                                historyEntries.clear();
-                                historyEntries.addAll(history.entries());
-                                historyHasMore = history.hasMore();
-                                historyLoading = false;
-                                historyPane.setCommits(historyEntries, historyHasMore,
+                                historyPages.replace(head, historyState, historyReaderForUi, history);
+                                historyPane.setCommits(historyPages.entries(), historyPages.hasMore(),
                                     GitFlowView.this::loadMoreHistory);
                                 continueHistoryReveal();
                             }
@@ -1890,17 +1859,17 @@ public class GitFlowView extends ViewPart
                             updatePrimary();
                         }
                         else if (historyReaderForUi != null)
-                            closeHistoryReader(historyReaderForUi);
+                            HistoryPages.closeReader(historyReaderForUi);
                     });
                 }
                 catch (org.eclipse.core.runtime.OperationCanceledException e)
                 {
-                    closeHistoryReader(createdHistoryReader);
+                    HistoryPages.closeReader(createdHistoryReader);
                     return Status.CANCEL_STATUS;
                 }
                 catch (Exception e)
                 {
-                    closeHistoryReader(createdHistoryReader);
+                    HistoryPages.closeReader(createdHistoryReader);
                     onUi(() ->
                     {
                         if (instance == GitFlowView.this && current == generation)
@@ -1935,74 +1904,42 @@ public class GitFlowView extends ViewPart
     private void loadMoreHistory()
     {
         Repository repository = selectedRepository();
-        ObjectId expectedHead = historyHead;
-        String expectedHistoryState = historyStateKey;
-        RecentHistory.Reader reader = historyReader;
-        if (repository == null || expectedHead == null || reader == null
-            || historyLoading || !historyHasMore)
+        HistoryPages.PageJob job = historyPages.beginLoad(repository, HISTORY_PAGE_SIZE);
+        if (job == null)
             return;
-        historyLoading = true;
         historyPane.setLoadingMore(true);
-        new Job("Загрузить следующие коммиты") //$NON-NLS-1$
+        job.addJobChangeListener(new JobChangeAdapter()
         {
             @Override
-            protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
+            public void done(IJobChangeEvent event)
             {
-                try
+                onUi(() ->
                 {
-                    RecentHistory.Page page = reader.readNext(HISTORY_PAGE_SIZE, monitor);
-                    ObjectId currentHead = repository.resolve(Constants.HEAD);
-                    String currentHistoryState = RecentHistory.stateKey(repository);
-                    onUi(() ->
+                    if (!sameRepository(selectedRepository(), repository))
+                        return;
+                    if (event.getResult().isOK())
                     {
-                        if (!sameRepository(selectedRepository(), repository))
-                            return;
-                        historyLoading = false;
-                        if (!Objects.equals(historyHead, expectedHead)
-                            || !Objects.equals(currentHead, expectedHead)
-                            || !Objects.equals(historyStateKey, expectedHistoryState)
-                            || !Objects.equals(currentHistoryState, expectedHistoryState))
+                        if (!historyPages.apply(job))
                         {
                             historyPane.setLoadingMore(false);
                             scheduleRefresh(0);
                             return;
                         }
-                        List<RecentHistory.Entry> nextPage = page.entries();
-                        historyEntries.addAll(nextPage);
-                        historyHasMore = page.hasMore();
-                        historyPane.appendCommits(nextPage, historyHasMore,
+                        historyPane.appendCommits(job.page().entries(), historyPages.hasMore(),
                             GitFlowView.this::loadMoreHistory);
                         continueHistoryReveal();
-                    });
-                    return Status.OK_STATUS;
-                }
-                catch (org.eclipse.core.runtime.OperationCanceledException e)
-                {
-                    onUi(() ->
+                    }
+                    else
                     {
-                        if (sameRepository(selectedRepository(), repository))
-                        {
-                            historyLoading = false;
-                            historyPane.setLoadingMore(false);
-                        }
-                    });
-                    return Status.CANCEL_STATUS;
-                }
-                catch (Exception e)
-                {
-                    onUi(() ->
-                    {
-                        if (sameRepository(selectedRepository(), repository))
-                        {
-                            historyLoading = false;
-                            historyPane.setLoadingMore(false);
-                            showFeedback("Не удалось загрузить коммиты: " + e.getMessage()); //$NON-NLS-1$
-                        }
-                    });
-                    return new Status(IStatus.ERROR, PLUGIN_ID, e.getMessage(), e);
-                }
+                        historyPages.finishLoad();
+                        historyPane.setLoadingMore(false);
+                        if (job.failure() != null)
+                            showFeedback("Не удалось загрузить коммиты: " + job.failure().getMessage()); //$NON-NLS-1$
+                    }
+                });
             }
-        }.schedule();
+        });
+        job.schedule();
     }
 
     private void startHistorySearch()
@@ -2028,7 +1965,7 @@ public class GitFlowView extends ViewPart
     private void nextHistoryMatch()
     {
         HistorySearchSession session = historySearchSession;
-        if (session == null || !session.query.equals(historyPane.getSearchQuery())
+        if (session == null || !session.query().equals(historyPane.getSearchQuery())
             || !historySearchContextMatches(session))
         {
             startHistorySearch();
@@ -2041,7 +1978,7 @@ public class GitFlowView extends ViewPart
     private void runHistorySearch(HistorySearchSession session)
     {
         historyPane.setSearchRunning(true);
-        HistorySearchJob job = new HistorySearchJob(session);
+        HistorySearchSession.SearchJob job = session.newJob();
         historySearchJob = job;
         job.addJobChangeListener(new JobChangeAdapter()
         {
@@ -2054,19 +1991,17 @@ public class GitFlowView extends ViewPart
                         historySearchJob = null;
                     boolean current = instance == GitFlowView.this && historySearchSession == session
                         && historySearchContextMatches(session)
-                        && session.query.equals(historyPane.getSearchQuery());
+                        && session.query().equals(historyPane.getSearchQuery());
                     if (!current)
                     {
-                        closeHistoryReader(session.reader);
-                        session.reader = null;
+                        session.closeReader();
                         return;
                     }
                     historyPane.setSearchRunning(false);
-                    completeHistorySearch(event, job.match, job.failure);
+                    completeHistorySearch(event, job.match(), job.failure());
                 });
             }
         });
-        job.setSystem(true);
         job.schedule();
     }
 
@@ -2086,171 +2021,57 @@ public class GitFlowView extends ViewPart
         }
         else
         {
-            historySearchRevealHash = match;
+            historyPages.requestReveal(match);
             showFeedback(Messages.get("historySearchFound")); //$NON-NLS-1$
             continueHistoryReveal();
-        }
-    }
-
-    private final class HistorySearchJob extends Job
-    {
-        private final HistorySearchSession session;
-        private String match;
-        private Exception failure;
-
-        private HistorySearchJob(HistorySearchSession session)
-        {
-            super(Messages.get("historySearchRunning")); //$NON-NLS-1$
-            this.session = session;
-        }
-
-        @Override
-        protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
-        {
-            try
-            {
-                if (monitor.isCanceled())
-                    return Status.CANCEL_STATUS;
-                if (session.reader == null)
-                    session.reader = RecentHistory.openSearch(session.repository, session.head);
-                match = session.reader.findNext(session.query, monitor);
-                return Status.OK_STATUS;
-            }
-            catch (org.eclipse.core.runtime.OperationCanceledException e)
-            {
-                return Status.CANCEL_STATUS;
-            }
-            catch (Exception e)
-            {
-                failure = e;
-                return new Status(IStatus.ERROR, PLUGIN_ID, e.getMessage(), e);
-            }
         }
     }
 
     private void historySearchQueryChanged()
     {
         HistorySearchSession session = historySearchSession;
-        if (session != null && !session.query.equals(historyPane.getSearchQuery()))
+        if (session != null && !session.query().equals(historyPane.getSearchQuery()))
             cancelHistorySearch();
-        historySearchRevealHash = null;
+        historyPages.cancelReveal();
     }
 
     private void cancelHistorySearchIfContextChanged(Repository repository)
     {
         HistorySearchSession session = historySearchSession;
-        if (session != null && sameRepository(session.repository, repository)
+        if (session != null && sameRepository(session.repository(), repository)
             && !historySearchContextMatches(session))
             cancelHistorySearch();
     }
 
     private boolean historySearchContextMatches(HistorySearchSession session)
     {
-        try
-        {
-            return sameRepository(selectedRepository(), session.repository)
-                && Objects.equals(session.branch, session.repository.getBranch())
-                && Objects.equals(session.head, session.repository.resolve(Constants.HEAD));
-        }
-        catch (IOException e)
-        {
-            return false;
-        }
+        return session.matches(selectedRepository());
     }
 
     private void cancelHistorySearch()
     {
         HistorySearchSession session = historySearchSession;
         historySearchSession = null;
-        historySearchRevealHash = null;
+        historyPages.cancelReveal();
         if (historySearchJob != null)
             historySearchJob.cancel();
-        else if (session != null && session.reader != null)
-        {
-            closeHistoryReader(session.reader);
-            session.reader = null;
-        }
+        else if (session != null)
+            session.closeReader();
         if (historyPane != null && !historyPane.isDisposed())
             historyPane.setSearchRunning(false);
     }
 
     private void continueHistoryReveal()
     {
-        String hash = historySearchRevealHash;
-        if (hash == null || historyPane == null || historyPane.isDisposed())
+        String hash = historyPages.revealHash();
+        if (hash == null || historyPane == null || historyPane.isDisposed() || historySearchSession == null)
             return;
-        HistorySearchSession session = historySearchSession;
-        if (session == null || !Objects.equals(historyHead, session.head))
-            return;
-        int index = -1;
-        for (int i = 0; i < historyEntries.size(); i++)
+        switch (historyPages.nextReveal(historySearchSession.head()))
         {
-            if (historyEntries.get(i).hash().equals(hash))
-            {
-                index = i;
-                break;
-            }
+            case SELECT -> historyPane.selectCommit(hash);
+            case LOAD_MORE -> loadMoreHistory();
+            case NONE -> { }
         }
-        if (index >= 0 && (historyEntries.size() - index - 1 >= 5 || !historyHasMore))
-        {
-            historyPane.selectCommit(hash);
-            historySearchRevealHash = null;
-        }
-        else if (historyHasMore)
-            loadMoreHistory();
-        else if (index < 0)
-            historySearchRevealHash = null;
-    }
-
-    private static final class HistorySearchSession
-    {
-        private final Repository repository;
-        private final String branch;
-        private final ObjectId head;
-        private final String query;
-        private RecentHistory.SearchReader reader;
-
-        private HistorySearchSession(Repository repository, String branch, ObjectId head, String query)
-        {
-            this.repository = repository;
-            this.branch = branch;
-            this.head = head;
-            this.query = query;
-        }
-    }
-
-    private static void closeHistoryReader(RecentHistory.Reader reader)
-    {
-        if (reader == null)
-            return;
-        Job closeJob = new Job("Закрыть историю коммитов") //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
-            {
-                reader.close();
-                return Status.OK_STATUS;
-            }
-        };
-        closeJob.setSystem(true);
-        closeJob.schedule();
-    }
-
-    private static void closeHistoryReader(RecentHistory.SearchReader reader)
-    {
-        if (reader == null)
-            return;
-        Job closeJob = new Job("Закрыть поиск по истории коммитов") //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(org.eclipse.core.runtime.IProgressMonitor monitor)
-            {
-                reader.close();
-                return Status.OK_STATUS;
-            }
-        };
-        closeJob.setSystem(true);
-        closeJob.schedule();
     }
 
     private void updateMergeMessage(RepositoryState state, String mergeMessage)
@@ -2403,102 +2224,13 @@ public class GitFlowView extends ViewPart
             group.setExpanded(expanded);
     }
 
-    private record ChangeDisplay(String text, String icon)
-    {
-    }
-
     private record PendingIndexChange(Repository repository, List<FileChange> files, boolean staged)
     {
     }
 
     private ChangeDisplay displayChangePath(String path)
     {
-        String relative = path.replace('\\', '/'); //$NON-NLS-1$
-        int sourceRoot = ("/" + relative).indexOf("/src/"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (sourceRoot >= 0)
-            relative = relative.substring(sourceRoot + "src/".length()); //$NON-NLS-1$
-
-        if ("Configuration.xml".equals(relative)) //$NON-NLS-1$
-            return namedChange("Configuration", "metadataConfiguration", "configuration"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-        String[] parts = relative.split("/"); //$NON-NLS-1$
-        if (parts.length < 2)
-            return new ChangeDisplay(relative, null);
-
-        String objectType = metadataTypeKey(parts[0]);
-        if (objectType == null)
-            return new ChangeDisplay(relative, null);
-
-        String objectName = parts[1];
-        String fileName = parts[parts.length - 1];
-        String icon = metadataIconName(parts[0]);
-        if ("CommonModules".equals(parts[0]) && parts.length >= 3) //$NON-NLS-1$
-            return componentChange(objectName, "partModule", objectType, icon); //$NON-NLS-1$
-        if ("Roles".equals(parts[0]) && "Rights.xml".equals(fileName) && parts.length >= 3) //$NON-NLS-1$ //$NON-NLS-2$
-            return namedChange(objectName, objectType, icon);
-
-        int forms = -1;
-        for (int i = 2; i < parts.length; i++)
-            if ("Forms".equals(parts[i])) //$NON-NLS-1$
-            {
-                forms = i;
-                break;
-            }
-        boolean formChange = forms >= 0 && forms + 1 < parts.length;
-        if (formChange)
-        {
-            String formIcon = metadataImage(icon) == null ? null : icon;
-            String formType = "metadataForm" + objectType.substring("metadata".length()); //$NON-NLS-1$
-            String formPart = "Module.bsl".equals(fileName) ? "partFormModule" : "partForm"; //$NON-NLS-1$ //$NON-NLS-2$
-            String label = objectName + " " + stripExtension(parts[forms + 1]) //$NON-NLS-1$
-                + " " + Messages.get(formPart); //$NON-NLS-1$
-            if (formIcon == null)
-                label += " " + Messages.getOrDefault(formType, Messages.get("metadataForm")); //$NON-NLS-1$
-            return new ChangeDisplay(label, formIcon);
-        }
-        if ("ManagerModule.bsl".equals(fileName)) //$NON-NLS-1$
-            return componentChange(objectName, "partManagerModule", objectType, icon); //$NON-NLS-1$
-        if ("ObjectModule.bsl".equals(fileName)) //$NON-NLS-1$
-            return componentChange(objectName, "partObjectModule", objectType, icon); //$NON-NLS-1$
-        if ("RecordSetModule.bsl".equals(fileName)) //$NON-NLS-1$
-            return componentChange(objectName, "partRecordSetModule", objectType, icon); //$NON-NLS-1$
-        if ("ValueManagerModule.bsl".equals(fileName)) //$NON-NLS-1$
-            return componentChange(objectName, "partValueManagerModule", objectType, icon); //$NON-NLS-1$
-        if ("Module.bsl".equals(fileName) //$NON-NLS-1$
-            && ("metadataCommonModule".equals(objectType) || "metadataCommonForm".equals(objectType) //$NON-NLS-1$ //$NON-NLS-2$
-                || "metadataHttpService".equals(objectType) || "metadataWebService".equals(objectType)) //$NON-NLS-1$ //$NON-NLS-2$
-            )
-            return componentChange(objectName, "partModule", objectType, icon); //$NON-NLS-1$
-        if ("metadataCommonForm".equals(objectType) && "Form.xml".equals(fileName) //$NON-NLS-1$ //$NON-NLS-2$
-            && containsPath(parts, "Ext", "Form.xml")) //$NON-NLS-1$ //$NON-NLS-2$
-            return namedChange(objectName, objectType, icon);
-        if (parts.length == 2 && fileName.endsWith(".xml")) //$NON-NLS-1$
-            return namedChange(stripExtension(objectName), objectType, icon);
-        // Files nested under a metadata object (templates, commands, layouts, etc.)
-        // still belong to that object. Showing the repository path exposes folders
-        // such as Catalogs and makes otherwise recognized metadata look inconsistent.
-        return namedChange(objectName, objectType, icon);
-    }
-
-    private ChangeDisplay namedChange(String name, String typeKey, String icon)
-    {
-        String usableIcon = metadataImage(icon) == null ? null : icon;
-        return new ChangeDisplay(usableIcon == null ? name + " " + Messages.get(typeKey) : name, usableIcon);
-    }
-
-    private ChangeDisplay componentChange(String name, String componentKey, String typeKey, String icon)
-    {
-        String usableIcon = metadataImage(icon) == null ? null : icon;
-        String label = componentKey.isEmpty() ? name : name + " " + Messages.get(componentKey); //$NON-NLS-1$
-        if (usableIcon == null)
-            label += " " + Messages.get(typeKey); //$NON-NLS-1$
-        return new ChangeDisplay(label, usableIcon);
-    }
-
-    private static String stripExtension(String name)
-    {
-        int extension = name.lastIndexOf('.'); //$NON-NLS-1$
-        return extension < 0 ? name : name.substring(0, extension);
+        return changePathFormatter.format(path);
     }
 
     private Image metadataImage(String name)
@@ -2508,147 +2240,12 @@ public class GitFlowView extends ViewPart
         Image cached = metadataImages.get(name);
         if (cached != null && !cached.isDisposed())
             return cached;
-        var bundle = Platform.getBundle("com._1c.g5.v8.dt.md.ui.shared"); //$NON-NLS-1$
-        URL entry = bundle == null ? null : bundle.getEntry("icons/obj16/" + name + ".png"); //$NON-NLS-1$
+        URL entry = metadataIcons.find(name);
         if (entry == null)
             return null;
         Image image = ImageDescriptor.createFromURL(entry).createImage();
         metadataImages.put(name, image);
         return image;
-    }
-
-    private static boolean containsPath(String[] parts, String... expected)
-    {
-        if (parts.length < expected.length)
-            return false;
-        for (int start = 0; start <= parts.length - expected.length; start++)
-        {
-            boolean match = true;
-            for (int i = 0; i < expected.length; i++)
-                if (!expected[i].equals(parts[start + i]))
-                {
-                    match = false;
-                    break;
-                }
-            if (match)
-                return true;
-        }
-        return false;
-    }
-
-    private static String metadataTypeKey(String folder)
-    {
-        return switch (folder)
-        {
-            case "AccountingRegisters" -> "metadataAccountingRegister"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "AccumulationRegisters" -> "metadataAccumulationRegister"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "BusinessProcesses" -> "metadataBusinessProcess"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Bots" -> "metadataBot"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Catalogs" -> "metadataCatalog"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ChartsOfAccounts" -> "metadataChartOfAccounts"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ChartsOfCalculationTypes" -> "metadataChartOfCalculationTypes"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ChartsOfCharacteristicTypes" -> "metadataChartOfCharacteristicTypes"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommandGroups" -> "metadataCommandGroup"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonAttributes" -> "metadataCommonAttribute"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonCommands" -> "metadataCommonCommand"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonForms" -> "metadataCommonForm"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonModules" -> "metadataCommonModule"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonPictures" -> "metadataCommonPicture"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonTemplates" -> "metadataCommonTemplate"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Constants" -> "metadataConstant"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Configuration" -> "metadataConfiguration"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DataProcessors" -> "metadataDataProcessor"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DefinedTypes" -> "metadataDefinedType"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DocumentJournals" -> "metadataDocumentJournal"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DocumentNumerators" -> "metadataDocumentNumerator"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Documents" -> "metadataDocument"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Enums" -> "metadataEnum"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "EventSubscriptions" -> "metadataEventSubscription"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ExchangePlans" -> "metadataExchangePlan"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ExternalDataSources" -> "metadataExternalDataSource"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "FilterCriteria" -> "metadataFilterCriterion"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "FunctionalOptions" -> "metadataFunctionalOption"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "FunctionalOptionsParameters" -> "metadataFunctionalOptionParameter"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "HTTPServices" -> "metadataHttpService"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "InformationRegisters" -> "metadataInformationRegister"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "IntegrationServices" -> "metadataIntegrationService"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Languages" -> "metadataLanguage"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Roles" -> "metadataRole"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ScheduledJobs" -> "metadataScheduledJob"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Sequences" -> "metadataSequence"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Servers" -> "metadataServer"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "SessionParameters" -> "metadataSessionParameter"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "SettingsStorages" -> "metadataSettingsStorage"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "StyleItems" -> "metadataStyleItem"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Styles" -> "metadataStyle"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Subsystems" -> "metadataSubsystem"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Tasks" -> "metadataTask"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "PaletteColors" -> "metadataPaletteColor"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "XDTOPackages" -> "metadataXdtoPackage"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "WebServices" -> "metadataWebService"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "WebSocketClients" -> "metadataWebSocketClient"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "WSReferences" -> "metadataWsReference"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Reports" -> "metadataReport"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CalculationRegisters" -> "metadataCalculationRegister"; //$NON-NLS-1$ //$NON-NLS-2$
-            default -> null;
-        };
-    }
-
-    private static String metadataIconName(String folder)
-    {
-        return switch (folder)
-        {
-            case "AccountingRegisters" -> "accounting_register"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "AccumulationRegisters" -> "accumulation_register"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "BusinessProcesses" -> "business_process"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Bots" -> "bot"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Catalogs" -> "catalog"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ChartsOfAccounts" -> "chart_of_accounts"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ChartsOfCalculationTypes" -> "chart_of_calculation_types"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ChartsOfCharacteristicTypes" -> "chart_of_characteristic_types"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommandGroups" -> "command_group"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonAttributes" -> "common_attribute"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonCommands" -> "common_command"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonForms" -> "common_form"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonModules" -> "common_module"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonPictures" -> "common_picture"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CommonTemplates" -> "common_template"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Configuration" -> "configuration"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Constants" -> "constant"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DataProcessors" -> "data_processor"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DefinedTypes" -> "defined_type"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DocumentJournals" -> "document_journal"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "DocumentNumerators" -> "document_numerator"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Documents" -> "document"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Enums" -> "enum"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "EventSubscriptions" -> "event_subscription"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ExchangePlans" -> "exchange_plan"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ExternalDataSources" -> "external_data_source"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "FilterCriteria" -> "filter_criterion"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "FunctionalOptions" -> "functional_option"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "FunctionalOptionsParameters" -> "functional_option_parameter"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "HTTPServices" -> "http"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "InformationRegisters" -> "information_register"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "IntegrationServices" -> "integration_service"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Languages" -> "language"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "PaletteColors" -> "palette_color"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Reports" -> "report"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Roles" -> "role"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "ScheduledJobs" -> "scheduled_job"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Sequences" -> "sequence"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "SessionParameters" -> "session_parameter"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "SettingsStorages" -> "settings_storage"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "StyleItems" -> "style_item"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Styles" -> "style"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Subsystems" -> "subsystem"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "Tasks" -> "task"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "XDTOPackages" -> "xdto_package"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "WebServices" -> "web_service"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "WebSocketClients" -> "web_socket_client"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "WSReferences" -> "ws_reference"; //$NON-NLS-1$ //$NON-NLS-2$
-            case "CalculationRegisters" -> "calculation_register"; //$NON-NLS-1$ //$NON-NLS-2$
-            default -> null;
-        };
     }
 
     private static boolean canPublishBranch(Repository repository)
@@ -3255,7 +2852,7 @@ public class GitFlowView extends ViewPart
     public void dispose()
     {
         cancelHistorySearch();
-        historySearchRevealHash = null;
+        historyPages.cancelReveal();
         getSite().getPage().removeSelectionListener(selectionListener);
         ResourcesPlugin.getWorkspace().removeResourceChangeListener(resourceListener);
         if (indexDiffEntry != null)
@@ -3267,8 +2864,7 @@ public class GitFlowView extends ViewPart
             refreshJob.cancel();
         if (mergeBaseJob != null)
             mergeBaseJob.cancel();
-        closeHistoryReader(historyReader);
-        historyReader = null;
+        historyPages.close();
         if (branchImage != null && !branchImage.isDisposed())
             branchImage.dispose();
         metadataImages.values().forEach(image ->
@@ -3277,6 +2873,7 @@ public class GitFlowView extends ViewPart
                 image.dispose();
         });
         metadataImages.clear();
+        metadataIcons.clear();
         instance = null;
         if (refsListener != null)
             refsListener.remove();

@@ -142,7 +142,7 @@ public final class RecentHistory
     {
         private final CancellablePlotWalk walk;
         private final PlotCommitList<PlotLane> commits = new PlotCommitList<>();
-        private final Map<String, List<String>> labelsByCommit = new HashMap<>();
+        private final Map<String, List<String>> labelsByCommit;
         private int position;
         private boolean closed;
         private boolean exhausted;
@@ -152,25 +152,12 @@ public final class RecentHistory
             walk = new CancellablePlotWalk(repository);
             try
             {
-                walk.sort(RevSort.TOPO, true);
                 List<Ref> refs = importantRefs(repository);
-                walk.addAdditionalRefs(refs);
-                ObjectId head = repository.resolve(Constants.HEAD);
-                if (head != null)
-                {
-                    walk.markStart(walk.parseCommit(head));
+                boolean hasHead = initializeWalk(repository, walk, refs);
+                if (hasHead)
                     commits.source(walk);
-                }
-                for (Ref ref : refs)
-                {
-                    Ref peeled = repository.getRefDatabase().peel(ref);
-                    ObjectId id = peeled.getPeeledObjectId() == null
-                        ? peeled.getObjectId() : peeled.getPeeledObjectId();
-                    if (id != null)
-                        labelsByCommit.computeIfAbsent(id.name(), key -> new ArrayList<>())
-                            .add(Repository.shortenRefName(ref.getName()));
-                }
-                exhausted = head == null;
+                labelsByCommit = readLabels(repository, refs);
+                exhausted = !hasHead;
             }
             catch (IOException | RuntimeException e)
             {
@@ -288,25 +275,13 @@ public final class RecentHistory
             return List.of();
         try (PlotWalk walk = new PlotWalk(repository))
         {
-            walk.sort(RevSort.TOPO, true);
             List<Ref> refs = importantRefs(repository);
-            walk.addAdditionalRefs(refs);
-            ObjectId head = repository.resolve(Constants.HEAD);
-            if (head == null)
+            if (!initializeWalk(repository, walk, refs))
                 return List.of();
-            walk.markStart(walk.parseCommit(head));
             PlotCommitList<PlotLane> commits = new PlotCommitList<>();
             commits.source(walk);
             commits.fillTo(offset + limit - 1);
-            Map<String, List<String>> labelsByCommit = new HashMap<>();
-            for (Ref ref : refs)
-            {
-                Ref peeled = repository.getRefDatabase().peel(ref);
-                ObjectId id = peeled.getPeeledObjectId() == null ? peeled.getObjectId() : peeled.getPeeledObjectId();
-                if (id != null)
-                    labelsByCommit.computeIfAbsent(id.name(), key -> new ArrayList<>())
-                        .add(Repository.shortenRefName(ref.getName()));
-            }
+            Map<String, List<String>> labelsByCommit = readLabels(repository, refs);
             List<Entry> result = new ArrayList<>(Math.min(limit, Math.max(0, commits.size() - offset)));
             for (int i = offset; i < commits.size() && result.size() < limit; i++)
             {
@@ -314,6 +289,31 @@ public final class RecentHistory
             }
             return List.copyOf(result);
         }
+    }
+
+    private static boolean initializeWalk(Repository repository, PlotWalk walk, List<Ref> refs) throws IOException
+    {
+        walk.sort(RevSort.TOPO, true);
+        walk.addAdditionalRefs(refs);
+        ObjectId head = repository.resolve(Constants.HEAD);
+        if (head == null)
+            return false;
+        walk.markStart(walk.parseCommit(head));
+        return true;
+    }
+
+    private static Map<String, List<String>> readLabels(Repository repository, List<Ref> refs) throws IOException
+    {
+        Map<String, List<String>> labelsByCommit = new HashMap<>();
+        for (Ref ref : refs)
+        {
+            Ref peeled = repository.getRefDatabase().peel(ref);
+            ObjectId id = peeled.getPeeledObjectId() == null ? peeled.getObjectId() : peeled.getPeeledObjectId();
+            if (id != null)
+                labelsByCommit.computeIfAbsent(id.name(), key -> new ArrayList<>())
+                    .add(Repository.shortenRefName(ref.getName()));
+        }
+        return labelsByCommit;
     }
 
     private static Entry entry(PlotCommit<PlotLane> commit, PlotWalk walk,

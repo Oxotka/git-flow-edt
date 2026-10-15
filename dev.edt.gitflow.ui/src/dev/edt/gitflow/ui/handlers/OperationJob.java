@@ -6,7 +6,6 @@ import java.util.ArrayList;
 
 import org.eclipse.egit.core.internal.job.RuleUtil;
 import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.core.runtime.ProgressMonitorWrapper;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.IJobChangeEvent;
@@ -22,6 +21,7 @@ import org.eclipse.swt.widgets.Shell;
 import dev.edt.gitflow.core.OperationResult;
 import dev.edt.gitflow.core.OperationScheduleGuard;
 import dev.edt.gitflow.ui.views.GitFlowView;
+import dev.edt.gitflow.ui.views.OperationProgressMonitor;
 
 public final class OperationJob
 {
@@ -75,54 +75,14 @@ public final class OperationJob
             return;
         }
         OperationResult[] completion = new OperationResult[1];
-        String[] currentPhase = new String[] { phase(title) };
         Job job = new Job(title)
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
             {
-                OperationResult result = operation.apply(repository, new ProgressMonitorWrapper(monitor)
-                {
-                    private int totalWork;
-                    private int worked;
-                    private int lastPercent = -1;
-
-                    @Override
-                    public void beginTask(String name, int totalWork)
-                    {
-                        this.totalWork = totalWork;
-                        worked = 0;
-                        lastPercent = -1;
-                        super.beginTask(name, totalWork);
-                        if (name != null && !name.isBlank())
-                            currentPhase[0] = phase(name);
-                        GitFlowView.updateProgress(currentPhase[0]);
-                    }
-
-                    @Override
-                    public void subTask(String name)
-                    {
-                        super.subTask(name);
-                        currentPhase[0] = phase(name);
-                        GitFlowView.publishStatus(title + ": " + name, currentPhase[0]); //$NON-NLS-1$
-                    }
-
-                    @Override
-                    public void worked(int work)
-                    {
-                        super.worked(work);
-                        worked += work;
-                        if (totalWork > 0)
-                        {
-                            int percent = Math.min(100, worked * 100 / totalWork);
-                            if (percent != lastPercent)
-                            {
-                                lastPercent = percent;
-                                GitFlowView.updateProgress(currentPhase[0] + " (" + percent + "%)"); //$NON-NLS-1$
-                            }
-                        }
-                    }
-                });
+                OperationResult result = operation.apply(repository,
+                    new OperationProgressMonitor(monitor, title, GitFlowView::updateProgress,
+                        (name, phase) -> GitFlowView.publishStatus(title + ": " + name, phase))); //$NON-NLS-1$
                 completion[0] = result;
                 if (result.kind() == OperationResult.Kind.CANCELLED)
                     return Status.CANCEL_STATUS;
@@ -195,26 +155,8 @@ public final class OperationJob
         });
         GitFlowView.started(repository, keepChangesEnabled);
         GitFlowView.useRepository(repository);
-        GitFlowView.publishStatus(title + Messages.get("operationStarted"), phase(title)); //$NON-NLS-1$
+        GitFlowView.publishStatus(title + Messages.get("operationStarted"), title); //$NON-NLS-1$
         job.schedule();
-    }
-
-    private static String phase(String text)
-    {
-        String value = text == null ? "" : text.toLowerCase(java.util.Locale.ROOT); //$NON-NLS-1$
-        if (value.contains("подготовить все") || value.contains("подготовка всех")) //$NON-NLS-1$ //$NON-NLS-2$
-            return "Подготавливаются изменения…"; //$NON-NLS-1$
-        if (value.contains("подготов")) return "Подготавливается файл…"; //$NON-NLS-1$
-        if (value.contains("отменить все")) return "Отменяем все изменения…"; //$NON-NLS-1$
-        if (value.contains("вернуть") || value.contains("убрать из коммита")) return "Возвращаем файл в изменения…"; //$NON-NLS-1$
-        if (value.contains("отмен")) return "Отменяем изменения…"; //$NON-NLS-1$
-        if (value.contains("переключ")) return "Переключаем ветку…"; //$NON-NLS-1$
-        if (value.contains("получ") || value.contains("pull") || value.contains("fetch")) return "Получаем изменения…"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        if (value.contains("отправ") || value.contains("push")) return "Отправляем изменения…"; //$NON-NLS-1$ //$NON-NLS-2$
-        if (value.contains("коммит") || value.contains("зафиксир")) return "Создаем коммит…"; //$NON-NLS-1$ //$NON-NLS-2$
-        if (value.contains("спрят") || value.contains("стеш")) return "Сохраняем локальные изменения…"; //$NON-NLS-1$ //$NON-NLS-2$
-        if (value.contains("истори")) return "Обновляем историю…"; //$NON-NLS-1$
-        return "Выполняется операция…"; //$NON-NLS-1$
     }
 
 }

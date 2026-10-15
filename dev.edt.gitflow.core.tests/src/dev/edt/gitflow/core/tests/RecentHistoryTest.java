@@ -132,6 +132,134 @@ public class RecentHistoryTest
         }
     }
 
+    @Test
+    public void bothReadersDecorateCommitsWithBranchesAndPeeledTags() throws Exception
+    {
+        Path directory = Files.createTempDirectory("gitflow-history-labels-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        {
+            String base = commit(git, directory, 0, "Base\n\nDescription", "Author"); //$NON-NLS-1$ //$NON-NLS-2$
+            String branch = git.getRepository().getBranch();
+            git.branchCreate().setName("older").call(); //$NON-NLS-1$
+            var remote = git.getRepository().updateRef(Constants.R_REMOTES + "origin/vendor"); //$NON-NLS-1$
+            remote.setNewObjectId(ObjectId.fromString(base));
+            remote.update();
+            git.getRepository().updateRef(Constants.R_REMOTES + "origin/HEAD") //$NON-NLS-1$
+                .link(Constants.R_REMOTES + "origin/vendor"); //$NON-NLS-1$
+            git.tag().setName("lightweight").setAnnotated(false).call(); //$NON-NLS-1$
+            git.tag().setName("release").setAnnotated(true).setMessage("Release") //$NON-NLS-1$ //$NON-NLS-2$
+                .setTagger(new org.eclipse.jgit.lib.PersonIdent("Tagger", "tagger@example.org")).call(); //$NON-NLS-1$ //$NON-NLS-2$
+            String head = commit(git, directory, 1, "Latest", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
+            git.checkout().setName("older").call(); //$NON-NLS-1$
+            commit(git, directory, 2, "Unrelated side commit", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
+            git.checkout().setName(branch).call();
+
+            for (List<RecentHistory.Entry> entries : readBoth(git, 10))
+            {
+                assertEquals(List.of(head, base), entries.stream().map(RecentHistory.Entry::hash).toList());
+                assertEquals(List.of(branch), entries.get(0).labels());
+                assertEquals(List.of("origin/vendor", "lightweight", "release"), entries.get(1).labels()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                assertEquals("Base", entries.get(1).subject()); //$NON-NLS-1$
+                assertEquals("Base\n\nDescription", entries.get(1).message()); //$NON-NLS-1$
+                assertEquals("Author", entries.get(1).author()); //$NON-NLS-1$
+            }
+        }
+    }
+
+    @Test
+    public void bothReadersLabelDetachedHead() throws Exception
+    {
+        Path directory = Files.createTempDirectory("gitflow-history-detached-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        {
+            String head = commit(git, directory, 0, "Detached", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
+            String branch = git.getRepository().getBranch();
+            git.checkout().setName(head).call();
+
+            for (List<RecentHistory.Entry> entries : readBoth(git, 10))
+            {
+                assertEquals(1, entries.size());
+                assertEquals(head, entries.get(0).hash());
+                assertEquals(List.of(branch, "HEAD"), entries.get(0).labels()); //$NON-NLS-1$
+            }
+        }
+    }
+
+    @Test
+    public void bothReadersKeepMergeParentsAndTopologicalOrder() throws Exception
+    {
+        Path directory = Files.createTempDirectory("gitflow-history-merge-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        {
+            String base = commit(git, directory, 0, "Base", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
+            String branch = git.getRepository().getBranch();
+            git.branchCreate().setName("side").call(); //$NON-NLS-1$
+            String main = commit(git, directory, 1, "Main", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
+            git.checkout().setName("side").call(); //$NON-NLS-1$
+            Files.writeString(directory.resolve("side.txt"), "side"); //$NON-NLS-1$ //$NON-NLS-2$
+            git.add().addFilepattern("side.txt").call(); //$NON-NLS-1$
+            String side = git.commit().setMessage("Side").setAuthor("Developer", "dev@example.org") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .setCommitter("Developer", "dev@example.org").call().name(); //$NON-NLS-1$ //$NON-NLS-2$
+            git.checkout().setName(branch).call();
+            String merge = git.merge().include(ObjectId.fromString(side)).setMessage("Merge side").call() //$NON-NLS-1$
+                .getNewHead().name();
+
+            for (List<RecentHistory.Entry> entries : readBoth(git, 10))
+            {
+                List<String> hashes = entries.stream().map(RecentHistory.Entry::hash).toList();
+                assertEquals(4, hashes.size());
+                assertEquals(merge, hashes.get(0));
+                assertEquals(base, hashes.get(3));
+                assertTrue(hashes.contains(main));
+                assertTrue(hashes.contains(side));
+                var plot = entries.get(0).plot();
+                assertEquals(2, plot.getParentCount());
+                assertEquals(main, plot.getParent(0).name());
+                assertEquals(side, plot.getParent(1).name());
+            }
+        }
+    }
+
+    @Test
+    public void emptyAndExactPageBoundariesDoNotLoseOrRepeatCommits() throws Exception
+    {
+        Path directory = Files.createTempDirectory("gitflow-history-boundaries-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        {
+            try (RecentHistory.Reader reader = RecentHistory.open(git.getRepository()))
+            {
+                assertEquals(new RecentHistory.Page(List.of(), false), reader.readNext(1));
+            }
+            String base = commit(git, directory, 0, "Base", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
+            String head = commit(git, directory, 1, "Latest", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(RecentHistory.read(git.getRepository(), -1, 2).isEmpty());
+            assertTrue(RecentHistory.read(git.getRepository(), 0, -1).isEmpty());
+            assertTrue(RecentHistory.read(git.getRepository(), 0, 0).isEmpty());
+            assertTrue(RecentHistory.read(git.getRepository(), 2, 1).isEmpty());
+            assertEquals(List.of(base), RecentHistory.read(git.getRepository(), 1, 2).stream()
+                .map(RecentHistory.Entry::hash).toList());
+            try (RecentHistory.Reader reader = RecentHistory.open(git.getRepository()))
+            {
+                assertTrue(reader.readNext(0).entries().isEmpty());
+                RecentHistory.Page first = reader.readNext(1);
+                RecentHistory.Page last = reader.readNext(1);
+                assertEquals(List.of(head), first.entries().stream().map(RecentHistory.Entry::hash).toList());
+                assertTrue(first.hasMore());
+                assertEquals(List.of(base), last.entries().stream().map(RecentHistory.Entry::hash).toList());
+                assertFalse(last.hasMore());
+                assertEquals(new RecentHistory.Page(List.of(), false), reader.readNext(1));
+            }
+        }
+    }
+
+    private static List<List<RecentHistory.Entry>> readBoth(Git git, int limit) throws Exception
+    {
+        try (RecentHistory.Reader reader = RecentHistory.open(git.getRepository()))
+        {
+            return List.of(RecentHistory.read(git.getRepository(), limit), reader.readNext(limit).entries());
+        }
+    }
+
     private static String commit(Git git, Path directory, int sequence, String message, String author)
         throws Exception
     {

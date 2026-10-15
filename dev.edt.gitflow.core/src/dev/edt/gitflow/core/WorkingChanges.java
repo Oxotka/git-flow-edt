@@ -13,6 +13,7 @@ import java.util.Set;
 
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.egit.core.internal.indexdiff.IndexDiffData;
 
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.Status;
@@ -44,15 +45,28 @@ public record WorkingChanges(List<FileChange> staged, List<FileChange> unstaged)
     public static WorkingChanges read(Repository repository) throws GitAPIException
     {
         Status status = Git.wrap(repository).status().call();
+        return fromStatus(status.getAdded(), status.getChanged(), status.getRemoved(),
+            status.getModified(), status.getMissing(), status.getUntracked(), status.getConflicting());
+    }
+
+    public static WorkingChanges fromIndexDiff(IndexDiffData data)
+    {
+        return fromStatus(data.getAdded(), data.getChanged(), data.getRemoved(),
+            data.getModified(), data.getMissing(), data.getUntracked(), data.getConflicting());
+    }
+
+    private static WorkingChanges fromStatus(Set<String> added, Set<String> changed, Set<String> removed,
+        Set<String> modified, Set<String> missing, Set<String> untracked, Set<String> conflicting)
+    {
         List<FileChange> staged = new ArrayList<>();
         List<FileChange> unstaged = new ArrayList<>();
-        add(staged, status.getAdded(), "A"); //$NON-NLS-1$
-        add(staged, status.getChanged(), "M"); //$NON-NLS-1$
-        add(staged, status.getRemoved(), "D"); //$NON-NLS-1$
-        add(unstaged, status.getModified(), "M"); //$NON-NLS-1$
-        add(unstaged, status.getMissing(), "D"); //$NON-NLS-1$
-        add(unstaged, status.getUntracked(), "U"); //$NON-NLS-1$
-        add(unstaged, status.getConflicting(), "C"); //$NON-NLS-1$
+        add(staged, added, "A"); //$NON-NLS-1$
+        add(staged, changed, "M"); //$NON-NLS-1$
+        add(staged, removed, "D"); //$NON-NLS-1$
+        add(unstaged, modified, "M"); //$NON-NLS-1$
+        add(unstaged, missing, "D"); //$NON-NLS-1$
+        add(unstaged, untracked, "U"); //$NON-NLS-1$
+        add(unstaged, conflicting, "C"); //$NON-NLS-1$
         staged.sort(Comparator.comparing(FileChange::path));
         unstaged.sort(Comparator.comparing(FileChange::path));
         return new WorkingChanges(List.copyOf(staged), List.copyOf(unstaged));
@@ -174,13 +188,12 @@ public record WorkingChanges(List<FileChange> staged, List<FileChange> unstaged)
     public static OperationResult stage(Repository repository, List<FileChange> files, IProgressMonitor monitor)
     {
         IProgressMonitor progress = monitor == null ? new NullProgressMonitor() : monitor;
-        for (int offset = 0; offset < files.size(); offset += 32)
+        if (progress.isCanceled())
+            return new OperationResult(Kind.CANCELLED, "Подготовка изменений отменена"); //$NON-NLS-1$
+        if (!files.isEmpty())
         {
-            if (progress.isCanceled())
-                return new OperationResult(Kind.CANCELLED, "Подготовка изменений отменена"); //$NON-NLS-1$
-            List<FileChange> batch = files.subList(offset, Math.min(offset + 32, files.size()));
-            progress.subTask(batch.get(0).path());
-            OperationResult result = stage(repository, batch);
+            progress.subTask(files.get(0).path());
+            OperationResult result = stage(repository, files);
             if (!result.succeeded())
                 return result;
         }
