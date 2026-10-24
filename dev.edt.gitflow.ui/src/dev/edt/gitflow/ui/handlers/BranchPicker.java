@@ -629,7 +629,7 @@ final class BranchPicker
         boolean create = choice.remote() && !choice.localExists();
         OperationJob.schedule(repository, tree.getShell(), Messages.get("checkoutTitle"), //$NON-NLS-1$
             (selectedRepository, monitor) -> BranchOperations.checkout(selectedRepository, localName, create,
-                create ? choice.ref() : null, monitor), null,
+                create ? choice.ref() : null, monitor, EdtCheckoutSupport::checkout), null,
             result ->
             {
                 if (result.workspaceChanged())
