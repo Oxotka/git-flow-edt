@@ -20,74 +20,6 @@ import dev.edt.gitflow.core.WorkingChanges;
 public class BranchOperationsTest
 {
     @Test
-    public void nativeCompletionFailureReportsRetainedStashAndChangedBranch() throws Exception
-    {
-        Path work = Files.createTempDirectory("gitflow-managed-end-failure-");
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
-        {
-            commit(git, work, "base\n");
-            git.branchCreate().setName("target").call();
-            Files.writeString(work.resolve("local.txt"), "local edit");
-            var result = BranchOperations.checkout(git.getRepository(), "target", false, null,
-                new NullProgressMonitor(), (repository, target, create, start, monitor) ->
-                {
-                    BranchOperations.checkoutDirect(repository, target, create, start, monitor);
-                    throw new java.io.IOException("Native completion failed");
-                });
-            assertEquals(OperationResult.Kind.ERROR, result.kind());
-            assertTrue(result.workspaceChanged());
-            assertEquals("target", git.getRepository().getBranch());
-            assertEquals(1, git.stashList().call().size());
-            assertTrue(result.message().contains(git.stashList().call().iterator().next().name()));
-        }
-    }
-
-    @Test
-    public void checkoutCoordinatorRunsAfterStashAndBeforeLocalEditsReturn() throws Exception
-    {
-        Path work = Files.createTempDirectory("gitflow-managed-checkout-");
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
-        {
-            commit(git, work, "base\n");
-            git.branchCreate().setName("target").call();
-            Files.writeString(work.resolve("local.txt"), "local edit");
-            var calls = new java.util.ArrayList<String>();
-            OperationResult result = BranchOperations.checkout(git.getRepository(), "target", false, null,
-                new NullProgressMonitor(), (repository, target, create, start, monitor) ->
-                {
-                    assertTrue(git.status().call().isClean());
-                    assertEquals(1, git.stashList().call().size());
-                    calls.add(target);
-                    BranchOperations.checkoutDirect(repository, target, create, start, monitor);
-                });
-            assertTrue(result.toString(), result.succeeded());
-            assertEquals(java.util.List.of("target"), calls);
-            assertEquals("local edit", Files.readString(work.resolve("local.txt")));
-            assertTrue(git.stashList().call().isEmpty());
-        }
-    }
-
-    @Test
-    public void nativePreparationFailureRestoresOriginalLocalEdits() throws Exception
-    {
-        Path work = Files.createTempDirectory("gitflow-managed-failure-");
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
-        {
-            commit(git, work, "base\n");
-            String original = git.getRepository().getBranch();
-            git.branchCreate().setName("target").call();
-            Files.writeString(work.resolve("local.txt"), "local edit");
-            OperationResult result = BranchOperations.checkout(git.getRepository(), "target", false, null,
-                new NullProgressMonitor(), (repository, target, create, start, monitor) ->
-                { throw new java.io.IOException("Native preparation failed"); });
-            assertEquals(OperationResult.Kind.ERROR, result.kind());
-            assertEquals(original, git.getRepository().getBranch());
-            assertEquals("local edit", Files.readString(work.resolve("local.txt")));
-            assertTrue(git.stashList().call().isEmpty());
-        }
-    }
-
-    @Test
     public void checkoutMergesNonoverlappingUnstagedEditsInSameFile() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-checkout-same-file-"); //$NON-NLS-1$
@@ -139,16 +71,10 @@ public class BranchOperationsTest
                 Files.writeString(work.resolve("note.txt"), "new local file\n"); //$NON-NLS-1$ //$NON-NLS-2$
                 WorkingChanges before = WorkingChanges.read(git.getRepository());
 
-                var coordinated = new java.util.ArrayList<String>();
                 OperationResult result = BranchOperations.checkout(git.getRepository(), "target", false, //$NON-NLS-1$
-                    null, new NullProgressMonitor(), (repository, target, create, start, monitor) ->
-                    {
-                        coordinated.add(target);
-                        BranchOperations.checkoutDirect(repository, target, create, start, monitor);
-                    });
+                    new NullProgressMonitor());
 
                 assertEquals(result.toString(), OperationResult.Kind.NEEDS_CHECKOUT_CLEANUP, result.kind());
-                assertEquals(java.util.List.of("target", original), coordinated);
                 assertEquals(original, git.getRepository().getBranch());
                 assertEquals(originalHead, git.getRepository().resolve("HEAD")); //$NON-NLS-1$
                 assertEquals(targetHead, git.getRepository().resolve("refs/heads/target")); //$NON-NLS-1$

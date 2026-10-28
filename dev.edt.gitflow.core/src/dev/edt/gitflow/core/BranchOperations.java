@@ -410,28 +410,6 @@ public final class BranchOperations
     public static OperationResult checkout(Repository repository, String target, boolean create,
         String startPoint, IProgressMonitor monitor)
     {
-        return checkout(repository, target, create, startPoint, monitor, BranchOperations::checkoutDirect);
-    }
-
-    @FunctionalInterface
-    public interface CheckoutExecutor
-    {
-        void checkout(Repository repository, String target, boolean create, String startPoint,
-            IProgressMonitor monitor) throws GitAPIException, IOException;
-    }
-
-    public static void checkoutDirect(Repository repository, String target, boolean create,
-        String startPoint, IProgressMonitor monitor) throws GitAPIException
-    {
-        var command = Git.wrap(repository).checkout().setName(target).setCreateBranch(create);
-        if (startPoint != null)
-            command.setStartPoint(startPoint).setUpstreamMode(SetupUpstreamMode.TRACK);
-        command.call();
-    }
-
-    public static OperationResult checkout(Repository repository, String target, boolean create,
-        String startPoint, IProgressMonitor monitor, CheckoutExecutor executor)
-    {
         if (!RepositorySupport.isSafe(repository))
             return new OperationResult(Kind.ERROR, "Репозиторий занят другой Git-операцией."); //$NON-NLS-1$
         boolean tagTarget = target != null && target.startsWith(Constants.R_TAGS);
@@ -463,9 +441,12 @@ public final class BranchOperations
             try
             {
                 monitor.subTask("Переключение на " + target); //$NON-NLS-1$
-                executor.checkout(repository, target, create, startPoint, monitor);
+                var command = git.checkout().setName(target).setCreateBranch(create);
+                if (startPoint != null)
+                    command.setStartPoint(startPoint).setUpstreamMode(SetupUpstreamMode.TRACK);
+                command.call();
             }
-            catch (GitAPIException | IOException e)
+            catch (GitAPIException e)
             {
                 if (stashId != null && original.equals(repository.getBranch()) && RepositorySupport.isSafe(repository))
                 {
@@ -474,11 +455,8 @@ public final class BranchOperations
                         return new OperationResult(Kind.CONFLICT,
                             "Переключение не удалось; исходные изменения остались в стеше: " //$NON-NLS-1$
                                 + restored.detail(), true);
-                    stashId = null;
                 }
-                return new OperationResult(Kind.ERROR, "Переключение не удалось: " + e.getMessage()
-                    + (stashId == null ? "" : " Изменения сохранены в стеше " + stashId),
-                    !original.equals(repository.getBranch())); //$NON-NLS-1$
+                return new OperationResult(Kind.ERROR, "Переключение не удалось: " + e.getMessage()); //$NON-NLS-1$
             }
             monitor.worked(1);
             if (stashId != null)
@@ -496,7 +474,7 @@ public final class BranchOperations
                         try
                         {
                             git.reset().setMode(ResetType.HARD).call();
-                            executor.checkout(repository, original, false, null, monitor);
+                            git.checkout().setName(original).call();
                             StashOperations.Result returned = StashOperations.applyAndDrop(repository, stashId);
                             if (returned.outcome() == StashOperations.Outcome.APPLIED)
                                 return new OperationResult(Kind.NEEDS_CHECKOUT_CLEANUP,
