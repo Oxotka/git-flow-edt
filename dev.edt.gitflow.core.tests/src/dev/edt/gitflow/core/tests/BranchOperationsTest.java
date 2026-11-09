@@ -262,6 +262,31 @@ public class BranchOperationsTest
         }
     }
 
+    @Test
+    public void checkoutReportsChangedPathsForTargetedRefresh() throws Exception
+    {
+        Path work = Files.createTempDirectory("gitflow-checkout-paths-"); //$NON-NLS-1$
+        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        {
+            commit(git, work, "base\n"); //$NON-NLS-1$
+            String original = git.getRepository().getBranch();
+            git.checkout().setCreateBranch(true).setName("target").call(); //$NON-NLS-1$
+            commit(git, work, "target\n"); //$NON-NLS-1$
+            Files.writeString(work.resolve("extra.txt"), "extra\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            git.add().addFilepattern("extra.txt").call(); //$NON-NLS-1$
+            git.commit().setMessage("extra").setAuthor("Test", "test@example.org") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .setCommitter("Test", "test@example.org").call(); //$NON-NLS-1$ //$NON-NLS-2$
+            git.checkout().setName(original).call();
+
+            OperationResult result = BranchOperations.checkout(git.getRepository(), "target", false, //$NON-NLS-1$
+                new NullProgressMonitor());
+
+            assertTrue(result.toString(), result.succeeded());
+            assertTrue(result.affectedPaths().toString(), result.affectedPaths().contains("file.txt")); //$NON-NLS-1$
+            assertTrue(result.affectedPaths().toString(), result.affectedPaths().contains("extra.txt")); //$NON-NLS-1$
+        }
+    }
+
     private static void commit(Git git, Path directory, String contents) throws Exception
     {
         Files.writeString(directory.resolve("file.txt"), contents); //$NON-NLS-1$

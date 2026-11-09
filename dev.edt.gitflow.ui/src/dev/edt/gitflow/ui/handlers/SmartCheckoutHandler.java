@@ -24,7 +24,7 @@ public final class SmartCheckoutHandler
                 operationResult ->
                 {
                     if (operationResult.workspaceChanged())
-                        ProjectRefreshSupport.afterCheckout(repository);
+                        ProjectRefreshSupport.afterCheckout(repository, operationResult.affectedPaths());
                 });
     }
 

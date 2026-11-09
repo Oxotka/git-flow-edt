@@ -418,10 +418,12 @@ public final class BranchOperations
             return new OperationResult(Kind.ERROR, "Некорректное имя ветки."); //$NON-NLS-1$
         String stashId = null;
         String original;
+        ObjectId before = null;
         monitor.beginTask("Переключение ветки", 3); //$NON-NLS-1$
         try
         {
             Git git = Git.wrap(repository);
+            before = repository.resolve(Constants.HEAD);
             original = repository.getBranch();
             if (target.equals(original))
                 return new OperationResult(Kind.NO_CHANGE, "Это уже текущая ветка."); //$NON-NLS-1$
@@ -495,7 +497,8 @@ public final class BranchOperations
                 }
             }
             monitor.worked(1);
-            return new OperationResult(Kind.SUCCESS, "Текущая ветка: " + target, true); //$NON-NLS-1$
+            return new OperationResult(Kind.SUCCESS, "Текущая ветка: " + target, true, false, //$NON-NLS-1$
+                affectedPaths(repository, git, before, stashId));
         }
         catch (GitAPIException | IOException e)
         {
@@ -507,6 +510,36 @@ public final class BranchOperations
         {
             monitor.done();
         }
+    }
+
+    /**
+     * Пути, которые изменились на диске: разница коммитов до и после переключения
+     * плюс файлы, возвращенные из стеша. По ним рабочая область обновляется
+     * точечно, без полного обхода проекта.
+     */
+    private static List<String> affectedPaths(Repository repository, Git git, ObjectId before, String stashId)
+    {
+        List<String> paths = new ArrayList<>();
+        try
+        {
+            paths.addAll(ChangedPaths.between(repository, before, repository.resolve(Constants.HEAD)));
+        }
+        catch (IOException e)
+        {
+            return List.of();
+        }
+        if (stashId != null)
+        {
+            try
+            {
+                paths.addAll(git.status().call().getUncommittedChanges());
+            }
+            catch (GitAPIException e)
+            {
+                return List.of();
+            }
+        }
+        return paths;
     }
 
 }

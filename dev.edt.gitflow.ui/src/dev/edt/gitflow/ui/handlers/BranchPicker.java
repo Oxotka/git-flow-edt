@@ -633,7 +633,7 @@ final class BranchPicker
             result ->
             {
                 if (result.workspaceChanged())
-                    ProjectRefreshSupport.afterCheckout(repository);
+                    ProjectRefreshSupport.afterCheckout(repository, result.affectedPaths());
                 refreshAfter(result);
             });
     }
