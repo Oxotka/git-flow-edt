@@ -29,8 +29,11 @@ import dev.edt.gitflow.ui.handlers.Messages;
 
 /**
  * Строка состояния merge request текущей ветки. Одна ссылка: номер открывает
- * merge request в браузере, «Создать» открывает диалог создания. Строка скрыта,
- * пока GitLab не настроен или ветка не отправлена на сервер.
+ * merge request в браузере, «Создать» открывает диалог создания.
+ * <p>
+ * Вся подготовка (настройки, хранилище сертификатов, запрос) выполняется в
+ * фоновой задаче: чтение хранилища сертификатов Windows заметно замедляет
+ * переключение веток, если делать это в потоке интерфейса.
  */
 final class MergeRequestPane
 {
@@ -42,30 +45,6 @@ final class MergeRequestPane
     private String branch;
     private String webUrl;
     private String lastKey = ""; //$NON-NLS-1$
-
-    /** Обновляет строку, только если сменился репозиторий или ветка. */
-    void refreshIfChanged(Repository repository)
-    {
-        String key = key(repository);
-        if (key.equals(lastKey))
-            return;
-        lastKey = key;
-        refresh(repository);
-    }
-
-    private static String key(Repository repository)
-    {
-        if (repository == null)
-            return ""; //$NON-NLS-1$
-        try
-        {
-            return repository.getDirectory() + "|" + repository.getBranch(); //$NON-NLS-1$
-        }
-        catch (Exception e)
-        {
-            return ""; //$NON-NLS-1$
-        }
-    }
 
     MergeRequestPane(Composite parent)
     {
@@ -88,6 +67,16 @@ final class MergeRequestPane
         excludeRow(true);
     }
 
+    /** Обновляет строку, только если сменился репозиторий или ветка. */
+    void refreshIfChanged(Repository repository)
+    {
+        String key = key(repository);
+        if (key.equals(lastKey))
+            return;
+        lastKey = key;
+        refresh(repository);
+    }
+
     void refresh(Repository repository)
     {
         if (refreshing)
@@ -97,34 +86,10 @@ final class MergeRequestPane
             hide();
             return;
         }
-        String remote = repository.getConfig().getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        GitLabRemote gitLab = remote == null ? null : parse(remote);
-        GitLabSettings settings = GitLabSettings.load();
-        String token = gitLab == null ? "" : settings.token(gitLab.host()); //$NON-NLS-1$
-        String currentBranch = branchName(repository);
-        if (gitLab == null || !settings.matches(gitLab.host()) || token.isBlank()
-            || currentBranch == null || isIntegrationBranch(currentBranch))
-        {
-            hide();
-            return;
-        }
-        final GitLabClient currentClient;
-        try
-        {
-            currentClient = new GitLabClient(gitLab, token, GitLabSsl.context(settings),
-                Duration.ofSeconds(10));
-        }
-        catch (Exception e)
-        {
-            hide();
-            return;
-        }
-        this.repository = repository;
-        this.client = currentClient;
-        this.branch = currentBranch;
         refreshing = true;
+        this.repository = repository;
+        final Repository currentRepository = repository;
         final Display display = link.getDisplay();
-        final String sourceBranch = currentBranch;
         Job job = new Job(Messages.get("mergeRequestRefreshTitle")) //$NON-NLS-1$
         {
             @Override
@@ -133,9 +98,29 @@ final class MergeRequestPane
                 String text;
                 String url = null;
                 boolean present = false;
+                GitLabClient created = null;
+                String sourceBranch = null;
                 try
                 {
-                    Optional<MergeRequestStatus> status = currentClient.statusForBranch(sourceBranch);
+                    String remote = currentRepository.getConfig()
+                        .getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    GitLabRemote gitLab = remote == null ? null : parse(remote);
+                    GitLabSettings settings = GitLabSettings.load();
+                    String token = gitLab == null ? "" : settings.token(gitLab.host()); //$NON-NLS-1$
+                    sourceBranch = branchName(currentRepository);
+                    if (gitLab == null || !settings.matches(gitLab.host()) || token.isBlank()
+                        || sourceBranch == null || isIntegrationBranch(sourceBranch))
+                    {
+                        display.asyncExec(() ->
+                        {
+                            refreshing = false;
+                            hide();
+                        });
+                        return Status.OK_STATUS;
+                    }
+                    created = new GitLabClient(gitLab, token, GitLabSsl.context(settings),
+                        Duration.ofSeconds(10));
+                    Optional<MergeRequestStatus> status = created.statusForBranch(sourceBranch);
                     if (status.isPresent())
                     {
                         present = true;
@@ -157,19 +142,20 @@ final class MergeRequestPane
                 final String result = text;
                 final String address = url;
                 final boolean exists = present;
+                final GitLabClient readyClient = created;
+                final String readyBranch = sourceBranch;
                 display.asyncExec(() ->
                 {
                     refreshing = false;
                     if (composite.isDisposed())
                         return;
                     webUrl = address;
+                    client = readyClient;
+                    branch = readyBranch;
                     link.setText(result);
                     composite.setVisible(true);
                     excludeRow(false);
                     composite.getParent().layout();
-                    link.getParent().layout();
-                    if (!exists)
-                        composite.setData("noMergeRequest", Boolean.TRUE); //$NON-NLS-1$
                 });
                 return Status.OK_STATUS;
             }
@@ -201,6 +187,20 @@ final class MergeRequestPane
     {
         if (composite.getLayoutData() instanceof GridData data)
             data.exclude = excluded;
+    }
+
+    private static String key(Repository repository)
+    {
+        if (repository == null)
+            return ""; //$NON-NLS-1$
+        try
+        {
+            return repository.getDirectory() + "|" + repository.getBranch(); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            return ""; //$NON-NLS-1$
+        }
     }
 
     private static String lastCommitSubject(Repository repository)
