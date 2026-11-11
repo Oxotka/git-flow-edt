@@ -1,6 +1,7 @@
 package dev.edt.gitflow.core.tests;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -47,6 +48,15 @@ public class MergeRequestTextTest
             "success", false, true, 0, "mergeable"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("!7 · Одобрено 2 из 2 · Проверки прошли · Готов к слиянию", //$NON-NLS-1$
             MergeRequestText.describe(ready, MergeRequestTextTest::message));
+    }
+
+    @Test
+    public void showsWhoAndWhenMerged()
+    {
+        var merged = new MergeRequestStatus(7, "Fix", "merged", false, "url", 0, 0, null, false, //$NON-NLS-1$ //$NON-NLS-2$
+            true, 0, null, "2026-11-11T09:30:00Z", "Иван Иванов"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MergeRequestText.describe(merged, MergeRequestTextTest::message)
+            .startsWith("!7 · Слит · Иван Иванов · ")); //$NON-NLS-1$
     }
 
     @Test

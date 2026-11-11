@@ -18,11 +18,24 @@ public final class MergeRequestStatus
     private final boolean discussionsResolved;
     private final int notesCount;
     private final String mergeStatus;
+    private final String mergedAt;
+    private final String mergedBy;
 
     public MergeRequestStatus(int iid, String title, String state, boolean draft, String webUrl,
         int approvedCount, int approvalsRequired, String pipelineStatus, boolean hasConflicts,
         boolean discussionsResolved, int notesCount, String mergeStatus)
     {
+        this(iid, title, state, draft, webUrl, approvedCount, approvalsRequired, pipelineStatus,
+            hasConflicts, discussionsResolved, notesCount, mergeStatus, null, null);
+    }
+
+    public MergeRequestStatus(int iid, String title, String state, boolean draft, String webUrl,
+        int approvedCount, int approvalsRequired, String pipelineStatus, boolean hasConflicts,
+        boolean discussionsResolved, int notesCount, String mergeStatus, String mergedAt,
+        String mergedBy)
+    {
+        this.mergedAt = mergedAt;
+        this.mergedBy = mergedBy;
         this.iid = iid;
         this.title = title;
         this.state = state;
@@ -95,5 +108,17 @@ public final class MergeRequestStatus
     public String mergeStatus()
     {
         return mergeStatus;
+    }
+
+    /** Когда слит, в формате ISO-8601; пусто, пока запрос открыт. */
+    public String mergedAt()
+    {
+        return mergedAt;
+    }
+
+    /** Кто слил запрос. */
+    public String mergedBy()
+    {
+        return mergedBy;
     }
 }

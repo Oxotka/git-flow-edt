@@ -138,7 +138,18 @@ public final class GitLabClient
         return Optional.of(new MergeRequestStatus(iid, title, string(chosen, "state"), //$NON-NLS-1$
             isDraft(chosen, title), string(chosen, "web_url"), approved, required, //$NON-NLS-1$
             pipelineStatus(chosen), conflicts, booleanValue(chosen, "blocking_discussions_resolved"), //$NON-NLS-1$
-            chosen.has("user_notes_count") ? chosen.get("user_notes_count").getAsInt() : 0, mergeStatus)); //$NON-NLS-1$ //$NON-NLS-2$
+            chosen.has("user_notes_count") ? chosen.get("user_notes_count").getAsInt() : 0, //$NON-NLS-1$ //$NON-NLS-2$
+            mergeStatus, string(chosen, "merged_at"), mergeUserName(chosen))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String mergeUserName(JsonObject mergeRequest)
+    {
+        for (String field : new String[] {"merge_user", "merged_by"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            if (mergeRequest.has(field) && mergeRequest.get(field).isJsonObject())
+                return string(mergeRequest.getAsJsonObject(field), "name"); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**

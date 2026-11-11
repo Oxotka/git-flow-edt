@@ -42,6 +42,11 @@ public final class MergeRequestText
         if ("merged".equals(status.state())) //$NON-NLS-1$
         {
             parts.add(messages.apply("mergeRequestMerged")); //$NON-NLS-1$
+            if (status.mergedBy() != null && !status.mergedBy().isBlank())
+                parts.add(status.mergedBy());
+            String mergedAt = formatMergedAt(status.mergedAt());
+            if (mergedAt != null)
+                parts.add(mergedAt);
             return String.join(" · ", parts); //$NON-NLS-1$
         }
         if (status.draft())
@@ -59,6 +64,23 @@ public final class MergeRequestText
         if ("opened".equals(status.state()) && !status.draft() && "mergeable".equals(status.mergeStatus())) //$NON-NLS-1$ //$NON-NLS-2$
             parts.add(messages.apply("mergeRequestReadyToMerge")); //$NON-NLS-1$
         return String.join(" · ", parts); //$NON-NLS-1$
+    }
+
+    /** Дата слияния в местном времени: 11.11.2026 12:30. */
+    static String formatMergedAt(String mergedAt)
+    {
+        if (mergedAt == null || mergedAt.isBlank())
+            return null;
+        try
+        {
+            return java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm") //$NON-NLS-1$
+                .withZone(java.time.ZoneId.systemDefault())
+                .format(java.time.OffsetDateTime.parse(mergedAt));
+        }
+        catch (java.time.format.DateTimeParseException e)
+        {
+            return mergedAt;
+        }
     }
 
     private static String pipelineText(String status)
