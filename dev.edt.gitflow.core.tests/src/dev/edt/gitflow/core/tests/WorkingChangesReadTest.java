@@ -23,7 +23,7 @@ public class WorkingChangesReadTest
     public void separatesAndSortsAllFileStatesWithoutIncludingIgnoredFiles() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-read-states-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             for (String name : List.of("a-removed", "b-missing", "c-changed", "d-modified", "e-both")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
                 Files.writeString(work.resolve(name), "base\n"); //$NON-NLS-1$
@@ -52,7 +52,7 @@ public class WorkingChangesReadTest
     public void showsConflictsOnlyInUnstagedChanges() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-read-conflict-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("conflict.txt"), "base\n"); //$NON-NLS-1$ //$NON-NLS-2$
             commitAll(git);
@@ -74,7 +74,7 @@ public class WorkingChangesReadTest
     public void handlesEmptyRepositoryAndFirstStagedFile() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-read-empty-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             assertChanges(git, List.of(), List.of());
             Files.writeString(work.resolve("new.txt"), "new\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -90,7 +90,7 @@ public class WorkingChangesReadTest
     public void returnedListsCannotBeModifiedAndKeepTheirSnapshot() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-read-snapshot-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("new.txt"), "new\n"); //$NON-NLS-1$ //$NON-NLS-2$
             WorkingChanges snapshot = WorkingChanges.read(git.getRepository());

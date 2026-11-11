@@ -23,7 +23,7 @@ public class BranchOperationsTest
     public void checkoutMergesNonoverlappingUnstagedEditsInSameFile() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-checkout-same-file-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             String base = "first\nsecond\nthird\nfourth\nfifth\nsixth\n"; //$NON-NLS-1$
             commit(git, work, base);
@@ -52,7 +52,7 @@ public class BranchOperationsTest
         for (boolean prepareFile : new boolean[] {false, true})
         {
             Path work = Files.createTempDirectory("gitflow-checkout-mixed-conflict-"); //$NON-NLS-1$
-            try (Git git = Git.init().setDirectory(work.toFile()).call())
+            try (Git git = TestRepository.init(work.toFile()))
             {
                 commit(git, work, "base\n"); //$NON-NLS-1$
                 String original = git.getRepository().getBranch();
@@ -91,7 +91,7 @@ public class BranchOperationsTest
     public void cleanCheckoutDoesNotCreateStash() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-clean-checkout-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("file.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern(".").call(); //$NON-NLS-1$
@@ -110,7 +110,7 @@ public class BranchOperationsTest
     public void checkoutKeepsStagedAndUnstagedFilesInTheirGroups() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-switch-index-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             commit(git, work, "base\n"); //$NON-NLS-1$
             Files.writeString(work.resolve("file.txt"), "staged\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -129,7 +129,7 @@ public class BranchOperationsTest
     public void checkoutTagDetachesHeadAndRestoresDirtyTree() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-tag-checkout-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             commit(git, directory, "base\n"); //$NON-NLS-1$
             git.tag().setName("v1.0").call(); //$NON-NLS-1$
@@ -151,7 +151,7 @@ public class BranchOperationsTest
     public void checkoutRestoresDirtyTree() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-branch-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             commit(git, directory, "base\n"); //$NON-NLS-1$
             String original = git.getRepository().getBranch();
@@ -170,7 +170,7 @@ public class BranchOperationsTest
     public void checkoutStashConflictRestoresOriginalStateBeforeCleanupPrompt() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-checkout-conflict-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             commit(git, directory, "base\n"); //$NON-NLS-1$
             Files.writeString(directory.resolve("other.txt"), "base\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -200,7 +200,7 @@ public class BranchOperationsTest
     public void checkoutReportsBothFilesWhenBothConflict() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-checkout-two-conflicts-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             commit(git, directory, "base\n"); //$NON-NLS-1$
             Files.writeString(directory.resolve("other.txt"), "base\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -238,7 +238,7 @@ public class BranchOperationsTest
         Path sourceDir = directory.resolve("source"); //$NON-NLS-1$
         Path work = directory.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(sourceDir.toFile()).call())
+             Git source = TestRepository.init(sourceDir.toFile()))
         {
             commit(source, sourceDir, "base\n"); //$NON-NLS-1$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -266,7 +266,7 @@ public class BranchOperationsTest
     public void checkoutReportsChangedPathsForTargetedRefresh() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-checkout-paths-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             commit(git, work, "base\n"); //$NON-NLS-1$
             String original = git.getRepository().getBranch();

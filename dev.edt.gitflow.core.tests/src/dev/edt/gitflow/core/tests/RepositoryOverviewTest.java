@@ -26,7 +26,7 @@ public class RepositoryOverviewTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "tracked.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$

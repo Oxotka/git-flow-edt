@@ -25,7 +25,7 @@ public class PullOperationsTest
     public void findsMergeBaseForDivergedCommits() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-merge-base-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             commit(git, work, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             ObjectId base = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
@@ -44,7 +44,7 @@ public class PullOperationsTest
     public void returnsNullWhenMergeBaseHasNoCommonHistory() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-unrelated-merge-base-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             commit(git, work, "first.txt", "first"); //$NON-NLS-1$ //$NON-NLS-2$
             ObjectId first = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
@@ -60,7 +60,7 @@ public class PullOperationsTest
     public void mergeBaseSearchStopsWhenCancelled() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-cancel-merge-base-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             commit(git, work, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             ObjectId head = git.getRepository().resolve("HEAD"); //$NON-NLS-1$
@@ -86,7 +86,7 @@ public class PullOperationsTest
         Path bare = root.resolve("origin.git"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git local = Git.init().setDirectory(work.toFile()).call())
+             Git local = TestRepository.init(work.toFile()))
         {
             commit(local, work, "file.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             local.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -109,7 +109,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -145,7 +145,7 @@ public class PullOperationsTest
         Path bare = root.resolve("origin.git"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git local = Git.init().setDirectory(work.toFile()).call())
+             Git local = TestRepository.init(work.toFile()))
         {
             commit(local, work, "file.txt", "local"); //$NON-NLS-1$ //$NON-NLS-2$
             local.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -171,7 +171,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -201,7 +201,7 @@ public class PullOperationsTest
     public void missingUpstreamDoesNotTouchLocalChanges() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-no-upstream-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             commit(git, work, "file.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             Files.writeString(work.resolve("file.txt"), "dirty"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -220,7 +220,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -249,7 +249,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "file.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -279,7 +279,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "file.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -323,7 +323,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "module.bsl", "first\nsecond\nthird\nfourth\nfifth\nsixth\n"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -363,7 +363,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "module.bsl", "first\nsecond\nthird\nfourth\nfifth\nsixth\n"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$
@@ -396,7 +396,7 @@ public class PullOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             commit(source, seed, "base.txt", "base"); //$NON-NLS-1$ //$NON-NLS-2$
             source.remoteAdd().setName("origin").setUri(new URIish(bare.toUri().toString())).call(); //$NON-NLS-1$

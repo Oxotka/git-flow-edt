@@ -72,7 +72,7 @@ public class WorkingChangesBulkTest
     private static final class Fixture implements AutoCloseable
     {
         private final Path work = Files.createTempDirectory("gitflow-bulk-stage-"); //$NON-NLS-1$
-        private final Git git = Git.init().setDirectory(work.toFile()).call();
+        private final Git git = TestRepository.init(work.toFile());
         private final List<FileChange> selection;
 
         Fixture() throws Exception

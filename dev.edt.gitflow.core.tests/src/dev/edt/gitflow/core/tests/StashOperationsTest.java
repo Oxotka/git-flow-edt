@@ -21,7 +21,7 @@ public class StashOperationsTest
     public void cleanRepositoryDoesNotCreateStash() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-clean-stash-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("file.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern(".").call(); //$NON-NLS-1$
@@ -37,7 +37,7 @@ public class StashOperationsTest
     public void restoresTrackedAndUntrackedFiles() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-stash-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             Path tracked = directory.resolve("tracked.txt"); //$NON-NLS-1$
             Files.writeString(tracked, "base\n"); //$NON-NLS-1$
@@ -67,7 +67,7 @@ public class StashOperationsTest
     public void keepsStashOnApplyConflict() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-conflict-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             Path file = directory.resolve("file.txt"); //$NON-NLS-1$
             Files.writeString(file, "base\n"); //$NON-NLS-1$
