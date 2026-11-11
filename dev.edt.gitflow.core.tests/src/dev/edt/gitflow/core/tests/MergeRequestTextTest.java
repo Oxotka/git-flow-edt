@@ -37,7 +37,7 @@ public class MergeRequestTextTest
     @Test
     public void describesApprovalsAndPipeline()
     {
-        assertEquals("!7 · Одобрено 1 из 2 · Проверки идут", MergeRequestText.describe( //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("MR-7 · Одобрено 1 из 2 · Проверки идут", MergeRequestText.describe( //$NON-NLS-1$ //$NON-NLS-2$
             status("opened", false, 1, 2, "running", false, true), MergeRequestTextTest::message)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -46,7 +46,7 @@ public class MergeRequestTextTest
     {
         var ready = new MergeRequestStatus(7, "Fix", "opened", false, "url", 2, 2, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "success", false, true, 0, "mergeable"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("!7 · Одобрено 2 из 2 · Проверки прошли · Готов к слиянию", //$NON-NLS-1$
+        assertEquals("MR-7 · Одобрено 2 из 2 · Проверки прошли · Готов к слиянию", //$NON-NLS-1$
             MergeRequestText.describe(ready, MergeRequestTextTest::message));
     }
 
@@ -56,29 +56,29 @@ public class MergeRequestTextTest
         var merged = new MergeRequestStatus(7, "Fix", "merged", false, "url", 0, 0, null, false, //$NON-NLS-1$ //$NON-NLS-2$
             true, 0, null, "2026-11-11T09:30:00Z", "Иван Иванов"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(MergeRequestText.describe(merged, MergeRequestTextTest::message)
-            .startsWith("!7 · Слит · Иван Иванов · ")); //$NON-NLS-1$
+            .startsWith("MR-7 · Слит · Иван Иванов · ")); //$NON-NLS-1$
     }
 
     @Test
     public void describesMergedAndDraft()
     {
-        assertEquals("!7 · Слит", MergeRequestText.describe( //$NON-NLS-1$
+        assertEquals("MR-7 · Слит", MergeRequestText.describe( //$NON-NLS-1$
             status("merged", false, 0, 0, null, false, true), MergeRequestTextTest::message)); //$NON-NLS-1$
-        assertEquals("!7 · Черновик", MergeRequestText.describe( //$NON-NLS-1$
+        assertEquals("MR-7 · Черновик", MergeRequestText.describe( //$NON-NLS-1$
             status("opened", true, 0, 0, null, false, true), MergeRequestTextTest::message)); //$NON-NLS-1$
     }
 
     @Test
     public void omitsMissingPipelineAndApprovals()
     {
-        assertEquals("!7", MergeRequestText.describe( //$NON-NLS-1$
+        assertEquals("MR-7", MergeRequestText.describe( //$NON-NLS-1$
             status("opened", false, 0, 0, null, false, true), MergeRequestTextTest::message)); //$NON-NLS-1$
     }
 
     @Test
     public void describesConflictsAndDiscussions()
     {
-        assertEquals("!7 · Есть конфликты · Есть незакрытые обсуждения", //$NON-NLS-1$
+        assertEquals("MR-7 · Есть конфликты · Есть незакрытые обсуждения", //$NON-NLS-1$
             MergeRequestText.describe(status("opened", false, 0, 0, null, true, false), //$NON-NLS-1$
                 MergeRequestTextTest::message));
     }

@@ -38,7 +38,7 @@ public final class MergeRequestText
         boolean links)
     {
         List<String> parts = new ArrayList<>();
-        parts.add(links ? "<a href=\"open\">!" + status.iid() + "</a>" : "!" + status.iid()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        parts.add(links ? "<a href=\"open\">MR-" + status.iid() + "</a>" : "MR-" + status.iid()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if ("merged".equals(status.state())) //$NON-NLS-1$
         {
             parts.add(messages.apply("mergeRequestMerged")); //$NON-NLS-1$
