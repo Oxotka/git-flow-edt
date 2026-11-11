@@ -1,7 +1,6 @@
 package dev.edt.gitflow.ui.handlers;
 
 import java.time.Duration;
-import java.util.List;
 
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
@@ -9,14 +8,20 @@ import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.dialogs.Dialog;
 import org.eclipse.jface.dialogs.IDialogConstants;
+import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jgit.lib.Repository;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
@@ -25,31 +30,31 @@ import dev.edt.gitflow.core.GitLabException;
 import dev.edt.gitflow.core.GitLabRemote;
 
 /**
- * Форма подключения к GitLab. Открывается из шестеренки панели. Кнопка проверки
- * отвечает словами, что именно настроено не так.
+ * Форма подключения к GitLab. Адрес сервера подставляется из репозитория, но
+ * остается редактируемым. Токен — поле со ссылкой на страницу его выпуска,
+ * сертификат — одна ссылка, проверка подключения справа под полями.
  */
 public final class GitLabSettingsDialog extends Dialog
 {
-    private final GitLabSettings settings;
-    private Text baseUrlField;
+    private final Repository repository;
+    private GitLabSettings settings;
+    private Text serverField;
     private Text tokenField;
-    private Button windowsCertificate;
-    private Button fileCertificate;
-    private Text certificateFileField;
-    private Button browseButton;
+    private Link certificateLink;
+    private Link tokenLink;
     private Label resultLabel;
 
-    private GitLabSettingsDialog(Shell shell, GitLabSettings settings)
+    private GitLabSettingsDialog(Shell shell, Repository repository)
     {
         super(shell);
-        this.settings = settings;
+        this.repository = repository;
+        this.settings = GitLabSettings.load();
         setShellStyle(getShellStyle() | SWT.RESIZE);
     }
 
-    public static void open(Shell shell)
+    public static void open(Shell shell, Repository repository)
     {
-        GitLabSettingsDialog dialog = new GitLabSettingsDialog(shell, GitLabSettings.load());
-        dialog.open();
+        new GitLabSettingsDialog(shell, repository).open();
     }
 
     @Override
@@ -65,49 +70,143 @@ public final class GitLabSettingsDialog extends Dialog
         Composite area = (Composite) super.createDialogArea(parent);
         Composite grid = new Composite(area, SWT.NONE);
         grid.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-        GridLayout layout = new GridLayout(3, false);
+        GridLayout layout = new GridLayout(2, false);
         layout.marginWidth = 0;
         grid.setLayout(layout);
 
         new Label(grid, SWT.NONE).setText(Messages.get("gitLabAddress")); //$NON-NLS-1$
-        baseUrlField = new Text(grid, SWT.BORDER);
-        baseUrlField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-        baseUrlField.setText(settings.baseUrl());
+        serverField = new Text(grid, SWT.BORDER);
+        serverField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        String knownServer = repositoryServer();
+        serverField.setText(knownServer == null ? settings.baseUrl() : knownServer);
 
         new Label(grid, SWT.NONE).setText(Messages.get("gitLabToken")); //$NON-NLS-1$
         tokenField = new Text(grid, SWT.BORDER | SWT.PASSWORD);
-        tokenField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-        tokenField.setToolTipText(Messages.get("gitLabTokenHint")); //$NON-NLS-1$
+        tokenField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        tokenField.setText(settings.token(host()));
 
-        new Label(grid, SWT.NONE).setText(Messages.get("gitLabCertificate")); //$NON-NLS-1$
-        Composite certificateModes = new Composite(grid, SWT.NONE);
-        certificateModes.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-        certificateModes.setLayout(new GridLayout(1, false));
-        windowsCertificate = new Button(certificateModes, SWT.RADIO);
-        windowsCertificate.setText(Messages.get("gitLabCertificateWindows")); //$NON-NLS-1$
-        fileCertificate = new Button(certificateModes, SWT.RADIO);
-        fileCertificate.setText(Messages.get("gitLabCertificateFile")); //$NON-NLS-1$
-        windowsCertificate.setSelection(settings.certMode() != GitLabSettings.CertMode.FILE);
-        fileCertificate.setSelection(settings.certMode() == GitLabSettings.CertMode.FILE);
+        Composite tokenHints = new Composite(grid, SWT.NONE);
+        tokenHints.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        tokenHints.setLayout(new GridLayout(2, false));
+        ((GridLayout) tokenHints.getLayout()).marginWidth = 0;
+        ((GridLayout) tokenHints.getLayout()).marginHeight = 0;
+        Label permissions = new Label(tokenHints, SWT.NONE);
+        permissions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        permissions.setText(Messages.get("gitLabTokenPermissions")); //$NON-NLS-1$
+        tokenLink = new Link(tokenHints, SWT.NONE);
+        tokenLink.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
+        tokenLink.setText(link(Messages.get("gitLabTokenWhere"))); //$NON-NLS-1$
+        tokenLink.addListener(SWT.Selection, event -> openTokenPage());
 
-        new Label(grid, SWT.NONE);
-        certificateFileField = new Text(grid, SWT.BORDER);
-        certificateFileField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        certificateFileField.setText(settings.certFile() == null ? "" : settings.certFile()); //$NON-NLS-1$
-        browseButton = new Button(grid, SWT.PUSH);
-        browseButton.setText(Messages.get("gitLabBrowse")); //$NON-NLS-1$
-        browseButton.addListener(SWT.Selection, event -> chooseCertificateFile());
-        fileCertificate.addListener(SWT.Selection, event -> updateCertificateFields());
-        windowsCertificate.addListener(SWT.Selection, event -> updateCertificateFields());
-        updateCertificateFields();
+        certificateLink = new Link(grid, SWT.NONE);
+        certificateLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        certificateLink.addListener(SWT.Selection, event -> showCertificateMenu());
+        updateCertificateLink();
 
         resultLabel = new Label(grid, SWT.WRAP);
-        resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 3, 1));
+        resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        Button check = new Button(area, SWT.PUSH);
+        Button check = new Button(grid, SWT.PUSH);
         check.setText(Messages.get("gitLabCheck")); //$NON-NLS-1$
+        check.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
         check.addListener(SWT.Selection, event -> checkConnection());
         return area;
+    }
+
+    private static String link(String text)
+    {
+        return "<a>" + text + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private String repositoryServer()
+    {
+        GitLabRemote remote = repositoryRemote();
+        return remote == null ? null : serverRoot(remote);
+    }
+
+    private GitLabRemote repositoryRemote()
+    {
+        if (repository == null)
+            return null;
+        String url = repository.getConfig().getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (url == null || url.isBlank())
+            return null;
+        try
+        {
+            return GitLabRemote.parse(url);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
+    }
+
+    private GitLabRemote serverRemote()
+    {
+        try
+        {
+            return GitLabRemote.forServer(serverField.getText());
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
+    }
+
+    private String host()
+    {
+        GitLabRemote remote = serverRemote();
+        return remote == null ? "" : remote.host(); //$NON-NLS-1$
+    }
+
+    private void openTokenPage()
+    {
+        GitLabRemote remote = serverRemote();
+        if (remote != null)
+            Program.launch(serverRoot(remote) + "/-/user_settings/personal_access_tokens"); //$NON-NLS-1$
+    }
+
+    /** Страница токенов живет в корне GitLab, а не под путем проекта. */
+    private static String serverRoot(GitLabRemote remote)
+    {
+        java.net.URI uri = java.net.URI.create(remote.webBase());
+        return uri.getScheme() + "://" + uri.getRawAuthority(); //$NON-NLS-1$
+    }
+
+    private void updateCertificateLink()
+    {
+        if (certificateLink == null || certificateLink.isDisposed())
+            return;
+        boolean file = settings.certMode() == GitLabSettings.CertMode.FILE
+            && settings.certFile() != null && !settings.certFile().isBlank();
+        String text = file
+            ? String.format(Messages.get("gitLabCertificateFileLink"), //$NON-NLS-1$
+                java.nio.file.Path.of(settings.certFile()).getFileName().toString())
+            : Messages.get("gitLabCertificateOsLink"); //$NON-NLS-1$
+        certificateLink.setText(link(text));
+        certificateLink.getParent().layout();
+    }
+
+    private void showCertificateMenu()
+    {
+        Menu menu = new Menu(certificateLink);
+        MenuItem system = new MenuItem(menu, SWT.RADIO);
+        system.setText(Messages.get("gitLabCertificateWindows")); //$NON-NLS-1$
+        system.setSelection(settings.certMode() != GitLabSettings.CertMode.FILE);
+        system.addListener(SWT.Selection, event -> useSystemCertificates());
+        MenuItem file = new MenuItem(menu, SWT.RADIO);
+        file.setText(Messages.get("gitLabCertificateChoose")); //$NON-NLS-1$
+        file.setSelection(settings.certMode() == GitLabSettings.CertMode.FILE);
+        file.addListener(SWT.Selection, event -> chooseCertificateFile());
+        menu.setLocation(certificateLink.toDisplay(0, certificateLink.getSize().y));
+        menu.setVisible(true);
+    }
+
+    private void useSystemCertificates()
+    {
+        settings = GitLabSettings.forTesting(serverField.getText(), host(),
+            GitLabSettings.CertMode.WINDOWS, ""); //$NON-NLS-1$
+        updateCertificateLink();
     }
 
     private void chooseCertificateFile()
@@ -115,21 +214,37 @@ public final class GitLabSettingsDialog extends Dialog
         FileDialog dialog = new FileDialog(getShell(), SWT.OPEN);
         dialog.setFilterExtensions(new String[] {"*.pem;*.crt;*.cer", "*.*"}); //$NON-NLS-1$ //$NON-NLS-2$
         String selected = dialog.open();
-        if (selected != null)
-            certificateFileField.setText(selected);
-    }
-
-    private void updateCertificateFields()
-    {
-        boolean file = fileCertificate.getSelection();
-        certificateFileField.setEnabled(file);
-        browseButton.setEnabled(file);
+        if (selected == null)
+            return;
+        settings = GitLabSettings.forTesting(serverField.getText(), host(),
+            GitLabSettings.CertMode.FILE, selected);
+        updateCertificateLink();
     }
 
     private void checkConnection()
     {
-        GitLabSettings candidate = candidate();
+        GitLabRemote remote = serverRemote();
+        if (remote == null)
+        {
+            resultLabel.setText(Messages.get("gitLabServerUnknown")); //$NON-NLS-1$
+            return;
+        }
+        GitLabSettings candidate = settings;
+        // Значения полей читаем на потоке UI: из фоновой задачи обращаться к
+        // элементам SWT нельзя.
+        final String token = tokenField.getText().trim();
+        String currentBranch;
+        try
+        {
+            currentBranch = repository == null ? null : repository.getBranch();
+        }
+        catch (java.io.IOException e)
+        {
+            currentBranch = null;
+        }
+        final String branch = currentBranch;
         resultLabel.setText(Messages.get("gitLabChecking")); //$NON-NLS-1$
+        final var display = resultLabel.getDisplay();
         Job job = new Job(Messages.get("gitLabCheck")) //$NON-NLS-1$
         {
             @Override
@@ -138,26 +253,45 @@ public final class GitLabSettingsDialog extends Dialog
                 String text;
                 try
                 {
-                    GitLabClient client = client(candidate, tokenField.getText());
-                    String name = client.currentUser();
-                    List<String> scopes = client.tokenScopes();
-                    boolean canWrite = scopes.isEmpty() || scopes.contains("api"); //$NON-NLS-1$
-                    text = canWrite ? Messages.get("gitLabConnectedAs") + " " + name //$NON-NLS-1$
-                        : Messages.get("gitLabTokenReadOnly"); //$NON-NLS-1$
+                    GitLabRemote projectRemote = repositoryRemote();
+                    GitLabLog.write("check start: server=" + remote.webBase() //$NON-NLS-1$
+                        + " project=" + (projectRemote == null ? "нет" : projectRemote.projectPath()) //$NON-NLS-1$ //$NON-NLS-2$
+                        + " host=" + remote.host() //$NON-NLS-1$
+                        + " tokenLength=" + token.length() //$NON-NLS-1$
+                        + " certMode=" + candidate.certMode()); //$NON-NLS-1$
+                    GitLabClient client = new GitLabClient(
+                        projectRemote == null ? remote : projectRemote, token,
+                        GitLabSsl.context(candidate), Duration.ofSeconds(10));
+                    // Проверяем именно то, ради чего нужен токен: доступ к merge
+                    // requests проекта. Право User: Read для этого не требуется.
+                    if (projectRemote != null && branch != null)
+                    {
+                        client.statusForBranch(branch);
+                        text = Messages.get("gitLabConnectedMergeRequests"); //$NON-NLS-1$
+                    }
+                    else
+                    {
+                        text = Messages.get("gitLabConnectedLimited"); //$NON-NLS-1$
+                    }
                 }
                 catch (GitLabException e)
                 {
+                    GitLabLog.write("gitlab error: " + e.kind(), e); //$NON-NLS-1$
                     text = textFor(e);
                 }
                 catch (Exception e)
                 {
-                    text = Messages.get("gitLabUnreachable"); //$NON-NLS-1$
+                    GitLabLog.write("unexpected error", e); //$NON-NLS-1$
+                    text = Messages.get("gitLabUnreachable") + " [" //$NON-NLS-1$ //$NON-NLS-2$
+                        + e.getClass().getSimpleName() + ": " + e.getMessage() + "]"; //$NON-NLS-1$ //$NON-NLS-2$
                 }
                 final String message = text;
-                resultLabel.getDisplay().asyncExec(() ->
+                display.asyncExec(() ->
                 {
-                    if (!resultLabel.isDisposed())
-                        resultLabel.setText(message);
+                    if (resultLabel.isDisposed())
+                        return;
+                    resultLabel.setText(message);
+                    MessageDialog.openInformation(getShell(), Messages.get("gitLabCheck"), message); //$NON-NLS-1$
                 });
                 return Status.OK_STATUS;
             }
@@ -171,56 +305,30 @@ public final class GitLabSettingsDialog extends Dialog
         {
             case UNAUTHORIZED -> Messages.get("gitLabTokenRejected"); //$NON-NLS-1$
             case FORBIDDEN -> Messages.get("gitLabTokenReadOnly"); //$NON-NLS-1$
+            case NOT_FOUND -> Messages.get("gitLabNotFound"); //$NON-NLS-1$
             case TLS -> Messages.get("gitLabCertificateRejected"); //$NON-NLS-1$
-            default -> Messages.get("gitLabUnreachable"); //$NON-NLS-1$
+            case SERVER -> Messages.get("gitLabServerError"); //$NON-NLS-1$
+            default -> Messages.get("gitLabUnreachable") //$NON-NLS-1$
+                + (error.getMessage() == null ? "" : " [" + error.getMessage() + "]"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         };
-    }
-
-    private static GitLabClient client(GitLabSettings candidate, String token) throws Exception
-    {
-        return new GitLabClient(GitLabRemote.forServer(candidate.baseUrl()), token,
-            GitLabSsl.context(candidate), Duration.ofSeconds(10));
-    }
-
-    private GitLabSettings candidate()
-    {
-        return GitLabSettings.forTesting(baseUrlField.getText().trim(),
-            host(baseUrlField.getText()),
-            fileCertificate.getSelection() ? GitLabSettings.CertMode.FILE : GitLabSettings.CertMode.WINDOWS,
-            certificateFileField.getText().trim());
-    }
-
-    private static String host(String serverUrl)
-    {
-        try
-        {
-            return GitLabRemote.forServer(serverUrl).host();
-        }
-        catch (IllegalArgumentException e)
-        {
-            return ""; //$NON-NLS-1$
-        }
     }
 
     @Override
     protected void okPressed()
     {
-        String serverUrl = baseUrlField.getText().trim();
-        String host = host(serverUrl);
-        if (host.isEmpty())
+        GitLabRemote remote = serverRemote();
+        if (remote == null)
         {
-            resultLabel.setText(Messages.get("gitLabUnreachable")); //$NON-NLS-1$
+            resultLabel.setText(Messages.get("gitLabServerUnknown")); //$NON-NLS-1$
             return;
         }
-        settings.save(serverUrl, host,
-            fileCertificate.getSelection() ? GitLabSettings.CertMode.FILE : GitLabSettings.CertMode.WINDOWS,
-            certificateFileField.getText().trim());
+        settings.save(remote.webBase(), remote.host(), settings.certMode(), settings.certFile());
         String token = tokenField.getText().trim();
         if (!token.isEmpty())
         {
             try
             {
-                settings.saveToken(host, token);
+                settings.saveToken(remote.host(), token);
             }
             catch (IllegalStateException e)
             {
