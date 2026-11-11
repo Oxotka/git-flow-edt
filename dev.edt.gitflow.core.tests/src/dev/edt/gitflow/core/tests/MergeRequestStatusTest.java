@@ -1,6 +1,7 @@
 package dev.edt.gitflow.core.tests;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -65,6 +66,27 @@ public class MergeRequestStatusTest
                 "{\"approved_by\":[],\"approvals_required\":0}"); //$NON-NLS-1$
 
             assertNull(server.client().statusForBranch("fix/1").orElseThrow().pipelineStatus()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void readsPipelineAndDiscussionsFromMergeRequestDetail() throws Exception
+    {
+        try (FakeGitLab server = new FakeGitLab())
+        {
+            server.respond(LIST, 200, "[{\"iid\":20,\"state\":\"opened\",\"title\":\"Fix\"}]"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            server.respond("/api/v4/projects/group%2Fproject/merge_requests/20", 200, //$NON-NLS-1$
+                "{\"iid\":20,\"state\":\"opened\",\"title\":\"Fix\",\"has_conflicts\":true," //$NON-NLS-1$
+                    + "\"blocking_discussions_resolved\":false,\"user_notes_count\":4," //$NON-NLS-1$
+                    + "\"detailed_merge_status\":\"discussions_not_resolved\"," //$NON-NLS-1$
+                    + "\"head_pipeline\":{\"status\":\"failed\"}}"); //$NON-NLS-1$
+            server.respond("/api/v4/projects/group%2Fproject/merge_requests/20/approvals", 200, "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+            MergeRequestStatus status = server.client().statusForBranch("fix/1").orElseThrow(); //$NON-NLS-1$
+            assertEquals("failed", status.pipelineStatus()); //$NON-NLS-1$
+            assertFalse(status.discussionsResolved());
+            assertTrue(status.hasConflicts());
+            assertEquals(4, status.notesCount());
         }
     }
 

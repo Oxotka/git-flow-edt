@@ -101,6 +101,16 @@ public final class GitLabClient
         if (chosen == null)
             return Optional.empty();
         int iid = chosen.get("iid").getAsInt(); //$NON-NLS-1$
+        try
+        {
+            // В списке нет пайплайна и состояния обсуждений: они приходят только
+            // в карточке merge request.
+            chosen = getObject(base + "/" + iid); //$NON-NLS-1$
+        }
+        catch (GitLabException e)
+        {
+            // Для строки состояния хватит и полей из списка.
+        }
 
         int approved = 0;
         int required = 0;
