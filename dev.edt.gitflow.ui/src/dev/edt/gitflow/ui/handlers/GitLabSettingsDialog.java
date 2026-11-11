@@ -99,16 +99,8 @@ public final class GitLabSettingsDialog extends Dialog
             }
         });
 
-        Composite tokenHints = new Composite(grid, SWT.NONE);
-        tokenHints.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-        tokenHints.setLayout(new GridLayout(2, false));
-        ((GridLayout) tokenHints.getLayout()).marginWidth = 0;
-        ((GridLayout) tokenHints.getLayout()).marginHeight = 0;
-        Label permissions = new Label(tokenHints, SWT.NONE);
-        permissions.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        permissions.setText(Messages.get("gitLabTokenPermissions")); //$NON-NLS-1$
-        tokenLink = new Link(tokenHints, SWT.NONE);
-        tokenLink.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
+        tokenLink = new Link(grid, SWT.NONE);
+        tokenLink.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false, 2, 1));
         tokenLink.setText(link(Messages.get("gitLabTokenWhere"))); //$NON-NLS-1$
         tokenLink.addListener(SWT.Selection, event -> openTokenPage());
 
