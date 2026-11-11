@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
@@ -55,17 +56,48 @@ final class FakeGitLab implements AutoCloseable
         return lastToken;
     }
 
+    private String[] lookup(String rawPath, String rawQuery)
+    {
+        String singleEncodedPath = rawPath.replace("%25", "%"); //$NON-NLS-1$ //$NON-NLS-2$
+        String singleEncodedQuery = rawQuery == null ? null : rawQuery.replace("%25", "%"); //$NON-NLS-1$ //$NON-NLS-2$
+        String[] candidates = {
+            rawPath + query(rawQuery),
+            singleEncodedPath + query(singleEncodedQuery),
+            decode(rawPath) + query(decode(rawQuery)),
+            rawPath,
+            singleEncodedPath,
+            decode(rawPath)
+        };
+        for (String candidate : candidates)
+        {
+            String[] response = responses.get(candidate);
+            if (response != null)
+                return response;
+        }
+        return null;
+    }
+
+    private static String query(String value)
+    {
+        return value == null ? "" : "?" + value; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String decode(String value)
+    {
+        return value == null ? null : URLDecoder.decode(value, StandardCharsets.UTF_8);
+    }
+
     private void handle(HttpExchange exchange) throws IOException
     {
         URI uri = exchange.getRequestURI();
-        String key = uri.getPath() + (uri.getQuery() == null ? "" : "?" + uri.getQuery()); //$NON-NLS-1$ //$NON-NLS-2$
+        String rawPath = uri.getRawPath();
+        String rawQuery = uri.getRawQuery();
+        String[] response = lookup(rawPath, rawQuery);
         lastBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         lastToken = exchange.getRequestHeaders().getFirst("PRIVATE-TOKEN"); //$NON-NLS-1$
-        String[] response = responses.get(key);
         if (response == null)
-            response = responses.get(uri.getPath());
-        if (response == null)
-            response = new String[] {"404", "{\"message\":\"404 Not Found\"}"}; //$NON-NLS-1$ //$NON-NLS-2$
+            response = new String[] {"404", "{\"message\":\"404 Not Found: " //$NON-NLS-1$ //$NON-NLS-2$
+                + rawPath + "?" + rawQuery + "\"}"}; //$NON-NLS-1$ //$NON-NLS-2$
         byte[] bytes = response[1].getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json"); //$NON-NLS-1$ //$NON-NLS-2$
         exchange.sendResponseHeaders(Integer.parseInt(response[0]), bytes.length);
