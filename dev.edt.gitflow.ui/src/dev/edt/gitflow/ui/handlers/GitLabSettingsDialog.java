@@ -83,7 +83,21 @@ public final class GitLabSettingsDialog extends Dialog
         new Label(grid, SWT.NONE).setText(Messages.get("gitLabToken")); //$NON-NLS-1$
         tokenField = new Text(grid, SWT.BORDER | SWT.PASSWORD);
         tokenField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        tokenField.setText(settings.token(host()));
+        String existing = settings.token(host());
+        if (!existing.isEmpty())
+        {
+            // Токен уже сохранен: поле заполнено маскировкой, значение не раскрываем.
+            tokenField.setText(existing.repeat(1).replaceAll(".", "•")); //$NON-NLS-1$ //$NON-NLS-2$
+            tokenField.setData("saved", Boolean.TRUE); //$NON-NLS-1$
+        }
+        tokenField.addListener(SWT.FocusIn, event ->
+        {
+            if (Boolean.TRUE.equals(tokenField.getData("saved"))) //$NON-NLS-1$
+            {
+                tokenField.setData("saved", null); //$NON-NLS-1$
+                tokenField.setText(""); //$NON-NLS-1$
+            }
+        });
 
         Composite tokenHints = new Composite(grid, SWT.NONE);
         tokenHints.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
@@ -99,16 +113,22 @@ public final class GitLabSettingsDialog extends Dialog
         tokenLink.addListener(SWT.Selection, event -> openTokenPage());
 
         certificateLink = new Link(grid, SWT.NONE);
-        certificateLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        certificateLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         certificateLink.addListener(SWT.Selection, event -> showCertificateMenu());
         updateCertificateLink();
+        if ("win32".equals(SWT.getPlatform())) //$NON-NLS-1$
+        {
+            // На Windows доверия к системному хранилищу достаточно.
+            certificateLink.setVisible(false);
+            ((GridData) certificateLink.getLayoutData()).exclude = true;
+        }
 
         resultLabel = new Label(grid, SWT.WRAP);
-        resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
 
         Button check = new Button(grid, SWT.PUSH);
         check.setText(Messages.get("gitLabCheck")); //$NON-NLS-1$
-        check.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
+        check.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false, 2, 1));
         check.addListener(SWT.Selection, event -> checkConnection());
         return area;
     }
@@ -221,6 +241,14 @@ public final class GitLabSettingsDialog extends Dialog
         updateCertificateLink();
     }
 
+    /** Токен из поля, а если оно показывает сохраненный — из настроек. */
+    private String effectiveToken()
+    {
+        if (Boolean.TRUE.equals(tokenField.getData("saved"))) //$NON-NLS-1$
+            return settings.token(host());
+        return tokenField.getText().trim();
+    }
+
     private void checkConnection()
     {
         GitLabRemote remote = serverRemote();
@@ -232,7 +260,7 @@ public final class GitLabSettingsDialog extends Dialog
         GitLabSettings candidate = settings;
         // Значения полей читаем на потоке UI: из фоновой задачи обращаться к
         // элементам SWT нельзя.
-        final String token = tokenField.getText().trim();
+        final String token = effectiveToken();
         String currentBranch;
         try
         {
@@ -323,7 +351,7 @@ public final class GitLabSettingsDialog extends Dialog
             return;
         }
         settings.save(remote.webBase(), remote.host(), settings.certMode(), settings.certFile());
-        String token = tokenField.getText().trim();
+        String token = effectiveToken();
         if (!token.isEmpty())
         {
             try
