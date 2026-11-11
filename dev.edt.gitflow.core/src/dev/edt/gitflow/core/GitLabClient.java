@@ -112,6 +112,30 @@ public final class GitLabClient
             chosen.has("user_notes_count") ? chosen.get("user_notes_count").getAsInt() : 0, mergeStatus)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * Создает merge request и возвращает его состояние без запроса апрувов.
+     */
+    public MergeRequestStatus createMergeRequest(CreateMergeRequest mergeRequest) throws GitLabException
+    {
+        HttpRequest create = HttpRequest.newBuilder(java.net.URI.create(remote.apiBase()
+            + "/projects/" + encode(remote.projectPath()) + "/merge_requests")) //$NON-NLS-1$ //$NON-NLS-2$
+            .timeout(timeout)
+            .header("PRIVATE-TOKEN", token == null ? "" : token) //$NON-NLS-1$ //$NON-NLS-2$
+            .header("Content-Type", "application/json") //$NON-NLS-1$ //$NON-NLS-2$
+            .POST(HttpRequest.BodyPublishers.ofString(mergeRequest.toJson().toString(),
+                StandardCharsets.UTF_8))
+            .build();
+        JsonObject created = JsonParser.parseString(send(create)).getAsJsonObject();
+        String title = string(created, "title"); //$NON-NLS-1$
+        String mergeStatus = string(created, "detailed_merge_status"); //$NON-NLS-1$
+        if (mergeStatus == null)
+            mergeStatus = string(created, "merge_status"); //$NON-NLS-1$
+        return new MergeRequestStatus(created.get("iid").getAsInt(), title, //$NON-NLS-1$
+            string(created, "state"), isDraft(created, title), string(created, "web_url"), //$NON-NLS-1$ //$NON-NLS-2$
+            0, 0, pipelineStatus(created), booleanValue(created, "has_conflicts"), //$NON-NLS-1$
+            booleanValue(created, "blocking_discussions_resolved"), 0, mergeStatus); //$NON-NLS-1$
+    }
+
     private static boolean isDraft(JsonObject mergeRequest, String title)
     {
         if (mergeRequest.has("draft")) //$NON-NLS-1$
