@@ -43,6 +43,12 @@ public final class GitLabSettings
         return new GitLabSettings(baseUrl, serverHost, CertMode.WINDOWS, null);
     }
 
+    public static GitLabSettings forTesting(String baseUrl, String serverHost, CertMode certMode,
+        String certFile)
+    {
+        return new GitLabSettings(baseUrl, serverHost, certMode, certFile);
+    }
+
     public static GitLabSettings load()
     {
         Preferences node = InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(NODE);

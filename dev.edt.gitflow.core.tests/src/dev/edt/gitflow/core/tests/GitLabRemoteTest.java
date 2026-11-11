@@ -35,6 +35,14 @@ public class GitLabRemoteTest
         assertEquals("group/project", remote.projectPath()); //$NON-NLS-1$
     }
 
+    @Test
+    public void buildsApiBaseFromServerRoot()
+    {
+        var remote = GitLabRemote.forServer("https://akeso.dept07/"); //$NON-NLS-1$
+        assertEquals("akeso.dept07", remote.host()); //$NON-NLS-1$
+        assertEquals("https://akeso.dept07/api/v4", remote.apiBase()); //$NON-NLS-1$
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void rejectsRemoteWithoutHost()
     {

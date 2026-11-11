@@ -42,6 +42,24 @@ public final class GitLabRemote
         return new GitLabRemote(uri.getHost(), web, path, api);
     }
 
+    /**
+     * Адрес сервера без проекта: используется формой настроек, где известен
+     * только корень GitLab.
+     */
+    public static GitLabRemote forServer(String serverUrl)
+    {
+        if (serverUrl == null || serverUrl.isBlank())
+            throw new IllegalArgumentException("Не задан адрес сервера GitLab."); //$NON-NLS-1$
+        String root = serverUrl.trim();
+        while (root.endsWith("/")) //$NON-NLS-1$
+            root = root.substring(0, root.length() - 1);
+        URI uri = URI.create(root);
+        if (uri.getHost() == null || uri.getScheme() == null)
+            throw new IllegalArgumentException("Некорректный адрес сервера GitLab."); //$NON-NLS-1$
+        String api = root + "/api/v4"; //$NON-NLS-1$
+        return new GitLabRemote(uri.getHost(), root, "", api); //$NON-NLS-1$
+    }
+
     public String host()
     {
         return host;

@@ -186,6 +186,11 @@ final class BranchPicker
         nameDescendingItem.addListener(SWT.Selection, event -> chooseSortOrder(nameDescendingItem,
             SortOrder.NAME_DESCENDING));
         hierarchyItem.addListener(SWT.Selection, event -> setHierarchyEnabled(hierarchyItem.getSelection()));
+        new MenuItem(settingsMenu, SWT.SEPARATOR);
+        MenuItem gitLabItem = new MenuItem(settingsMenu, SWT.PUSH);
+        gitLabItem.setText(Messages.get("gitLabSettings")); //$NON-NLS-1$
+        gitLabItem.addListener(SWT.Selection,
+            event -> GitLabSettingsDialog.open(panel.getShell()));
         settingsMenu.addListener(SWT.Show, event -> updateSettingsMenu());
         settingsButton.addListener(SWT.Selection, event ->
         {
