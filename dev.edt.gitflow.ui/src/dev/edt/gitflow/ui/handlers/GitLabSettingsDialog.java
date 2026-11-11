@@ -287,7 +287,28 @@ public final class GitLabSettingsDialog extends Dialog
                     if (projectRemote != null && branch != null)
                     {
                         client.statusForBranch(branch);
-                        text = Messages.get("gitLabConnectedMergeRequests"); //$NON-NLS-1$
+                        StringBuilder status = new StringBuilder(
+                            Messages.get("gitLabConnectedMergeRequests")); //$NON-NLS-1$
+                        try
+                        {
+                            status.append(". ").append(Messages.get("gitLabConnectedAs")) //$NON-NLS-1$ //$NON-NLS-2$
+                                .append(' ').append(client.currentUser());
+                        }
+                        catch (GitLabException e)
+                        {
+                            if (e.kind() == GitLabException.Kind.FORBIDDEN)
+                                status.append(". ").append(Messages.get("gitLabHintUserRead")); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
+                        try
+                        {
+                            client.projectMembers();
+                        }
+                        catch (GitLabException e)
+                        {
+                            if (e.kind() == GitLabException.Kind.FORBIDDEN)
+                                status.append(". ").append(Messages.get("gitLabHintMemberRead")); //$NON-NLS-1$ //$NON-NLS-2$
+                        }
+                        text = status.toString();
                     }
                     else
                     {
