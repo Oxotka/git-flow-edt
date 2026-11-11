@@ -81,6 +81,7 @@ public final class GitLabSettings
         {
             throw new IllegalStateException("Не удалось сохранить настройки GitLab.", e); //$NON-NLS-1$
         }
+        GitLabSsl.reset();
     }
 
     public String baseUrl()

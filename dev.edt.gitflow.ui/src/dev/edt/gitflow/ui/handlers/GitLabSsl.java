@@ -17,11 +17,37 @@ import javax.net.ssl.TrustManagerFactory;
  */
 public final class GitLabSsl
 {
+    private static String cachedKey;
+    private static SSLContext cachedContext;
+
     private GitLabSsl()
     {
     }
 
-    public static SSLContext context(GitLabSettings settings) throws Exception
+    /**
+     * Контекст строится один раз на режим сертификата: чтение хранилища Windows
+     * заметно дорого, а настройки меняются редко.
+     */
+    public static synchronized SSLContext context(GitLabSettings settings) throws Exception
+    {
+        String key = settings.certMode() + "|" //$NON-NLS-1$
+            + (settings.certFile() == null ? "" : settings.certFile()); //$NON-NLS-1$
+        if (key.equals(cachedKey) && cachedContext != null)
+            return cachedContext;
+        SSLContext built = build(settings);
+        cachedKey = key;
+        cachedContext = built;
+        return built;
+    }
+
+    /** Сбрасывает кеш: вызывается после сохранения настроек подключения. */
+    public static synchronized void reset()
+    {
+        cachedKey = null;
+        cachedContext = null;
+    }
+
+    private static SSLContext build(GitLabSettings settings) throws Exception
     {
         if (settings.certMode() == GitLabSettings.CertMode.FILE
             && settings.certFile() != null && !settings.certFile().isBlank())
