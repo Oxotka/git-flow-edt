@@ -1,6 +1,8 @@
 package dev.edt.gitflow.ui.views;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
@@ -12,6 +14,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
@@ -22,7 +25,9 @@ import dev.edt.gitflow.core.CreateMergeRequest;
 import dev.edt.gitflow.core.GitLabClient;
 import dev.edt.gitflow.core.GitLabException;
 import dev.edt.gitflow.core.MergeRequestStatus;
+import dev.edt.gitflow.core.ProjectMember;
 import dev.edt.gitflow.ui.handlers.Messages;
+import dev.edt.gitflow.ui.handlers.ReviewerCache;
 
 /**
  * Диалог создания merge request для текущей ветки. Заголовок заполнен первой
@@ -39,6 +44,9 @@ final class MergeRequestCreateDialog extends Dialog
     private Button draftButton;
     private Button removeBranchButton;
     private Label resultLabel;
+    private Label reviewerLabel;
+    private Combo reviewerCombo;
+    private final List<ProjectMember> reviewerOptions = new ArrayList<>();
     private MergeRequestStatus created;
 
     MergeRequestCreateDialog(Shell shell, GitLabClient client, String sourceBranch,
@@ -82,6 +90,14 @@ final class MergeRequestCreateDialog extends Dialog
         descriptionData.heightHint = 90;
         descriptionField.setLayoutData(descriptionData);
 
+        reviewerLabel = new Label(grid, SWT.NONE);
+        reviewerLabel.setText(Messages.get("mergeRequestReviewer")); //$NON-NLS-1$
+        reviewerCombo = new Combo(grid, SWT.DROP_DOWN | SWT.READ_ONLY);
+        reviewerCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        reviewerLabel.setVisible(false);
+        reviewerCombo.setVisible(false);
+        loadReviewers();
+
         draftButton = new Button(grid, SWT.CHECK);
         draftButton.setText(Messages.get("mergeRequestDraft")); //$NON-NLS-1$
         draftButton.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
@@ -93,6 +109,80 @@ final class MergeRequestCreateDialog extends Dialog
         resultLabel = new Label(grid, SWT.WRAP);
         resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
         return area;
+    }
+
+    private void loadReviewers()
+    {
+        String projectPath = client.remote().projectPath();
+        for (ProjectMember member : ReviewerCache.recent(projectPath))
+            reviewerOptions.add(member);
+        applyReviewerOptions();
+        final var display = reviewerCombo.getDisplay();
+        Job job = new Job(Messages.get("mergeRequestReviewerLoading")) //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                List<ProjectMember> loaded = null;
+                try
+                {
+                    loaded = client.projectMembers();
+                }
+                catch (Exception e)
+                {
+                    // Без права Member: Read остаются только прошлые выборы.
+                }
+                final List<ProjectMember> members = loaded;
+                if (members == null || members.isEmpty())
+                    return Status.OK_STATUS;
+                display.asyncExec(() ->
+                {
+                    if (reviewerCombo.isDisposed())
+                        return;
+                    String selected = reviewerCombo.getText();
+                    for (ProjectMember member : members)
+                    {
+                        boolean known = reviewerOptions.stream()
+                            .anyMatch(existing -> existing.id() == member.id());
+                        if (!known)
+                            reviewerOptions.add(member);
+                    }
+                    applyReviewerOptions();
+                    if (!selected.isEmpty())
+                        reviewerCombo.setText(selected);
+                });
+                return Status.OK_STATUS;
+            }
+        };
+        job.setUser(false);
+        job.schedule();
+    }
+
+    private void applyReviewerOptions()
+    {
+        if (reviewerCombo.isDisposed())
+            return;
+        boolean visible = !reviewerOptions.isEmpty();
+        reviewerLabel.setVisible(visible);
+        reviewerCombo.setVisible(visible);
+        if (!visible)
+            return;
+        String previous = reviewerCombo.getText();
+        reviewerCombo.setItems(reviewerOptions.stream().map(ProjectMember::displayName)
+            .toArray(String[]::new));
+        if (!previous.isEmpty())
+            reviewerCombo.setText(previous);
+        else if (reviewerCombo.getItemCount() > 0)
+            reviewerCombo.select(0);
+        reviewerCombo.getParent().layout();
+    }
+
+    private ProjectMember selectedReviewer()
+    {
+        int index = reviewerCombo.getSelectionIndex();
+        if (index < 0 || index >= reviewerOptions.size())
+            return null;
+        return reviewerOptions.get(index);
     }
 
     MergeRequestStatus created()
@@ -114,6 +204,9 @@ final class MergeRequestCreateDialog extends Dialog
                 .description(descriptionField.getText())
                 .draft(draftButton.getSelection())
                 .removeSourceBranch(removeBranchButton.getSelection());
+        ProjectMember reviewer = selectedReviewer();
+        if (reviewer != null)
+            request.reviewer(reviewer.id());
         resultLabel.setText(Messages.get("mergeRequestCreating")); //$NON-NLS-1$
         final var display = resultLabel.getDisplay();
         Job job = new Job(Messages.get("mergeRequestCreateTitle")) //$NON-NLS-1$
@@ -154,6 +247,9 @@ final class MergeRequestCreateDialog extends Dialog
                         return;
                     }
                     created = value;
+                    ProjectMember chosen = selectedReviewer();
+                    if (chosen != null)
+                        ReviewerCache.remember(client.remote().projectPath(), chosen);
                     okPressedDone();
                 });
                 return Status.OK_STATUS;

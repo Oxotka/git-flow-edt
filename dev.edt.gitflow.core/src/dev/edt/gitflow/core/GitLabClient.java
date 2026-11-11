@@ -38,10 +38,29 @@ public final class GitLabClient
         this.remote = remote;
         this.token = token;
         this.timeout = timeout;
-        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT);
+        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT)
+            .proxy(new java.net.ProxySelector()
+            {
+                @Override
+                public List<java.net.Proxy> select(java.net.URI uri)
+                {
+                    return List.of(java.net.Proxy.NO_PROXY);
+                }
+
+                @Override
+                public void connectFailed(java.net.URI uri, java.net.SocketAddress address, IOException e)
+                {
+                    // Прямое соединение не использует прокси, сообщать некуда.
+                }
+            });
         if (ssl != null)
             builder.sslContext(ssl);
         this.http = builder.build();
+    }
+
+    public GitLabRemote remote()
+    {
+        return remote;
     }
 
     public String currentUser() throws GitLabException
@@ -110,6 +129,24 @@ public final class GitLabClient
             isDraft(chosen, title), string(chosen, "web_url"), approved, required, //$NON-NLS-1$
             pipelineStatus(chosen), conflicts, booleanValue(chosen, "blocking_discussions_resolved"), //$NON-NLS-1$
             chosen.has("user_notes_count") ? chosen.get("user_notes_count").getAsInt() : 0, mergeStatus)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Участники проекта для выбора проверяющего. Нужен scope или право
+     * Member: Read; без него GitLab отвечает 403.
+     */
+    public List<ProjectMember> projectMembers() throws GitLabException
+    {
+        String path = "projects/" + encode(remote.projectPath()) + "/members/all?per_page=100"; //$NON-NLS-1$ //$NON-NLS-2$
+        JsonArray members = JsonParser.parseString(send(request(path))).getAsJsonArray();
+        List<ProjectMember> result = new ArrayList<>();
+        for (JsonElement element : members)
+        {
+            JsonObject member = element.getAsJsonObject();
+            result.add(new ProjectMember(member.get("id").getAsInt(), string(member, "name"), //$NON-NLS-1$ //$NON-NLS-2$
+                string(member, "username"))); //$NON-NLS-1$
+        }
+        return result;
     }
 
     /**

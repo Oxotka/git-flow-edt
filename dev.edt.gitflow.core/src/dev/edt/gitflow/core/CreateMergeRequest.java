@@ -14,6 +14,7 @@ public final class CreateMergeRequest
     private String description;
     private boolean draft;
     private boolean removeSourceBranch;
+    private int reviewerId;
 
     public CreateMergeRequest(String sourceBranch, String targetBranch, String title)
     {
@@ -40,6 +41,12 @@ public final class CreateMergeRequest
         return this;
     }
 
+    public CreateMergeRequest reviewer(int memberId)
+    {
+        this.reviewerId = memberId;
+        return this;
+    }
+
     public String effectiveTitle()
     {
         if (!draft || title.startsWith("Draft:")) //$NON-NLS-1$
@@ -56,6 +63,12 @@ public final class CreateMergeRequest
         if (description != null && !description.isBlank())
             json.addProperty("description", description); //$NON-NLS-1$
         json.addProperty("remove_source_branch", removeSourceBranch); //$NON-NLS-1$
+        if (reviewerId > 0)
+        {
+            com.google.gson.JsonArray reviewers = new com.google.gson.JsonArray();
+            reviewers.add(reviewerId);
+            json.add("reviewer_ids", reviewers); //$NON-NLS-1$
+        }
         return json;
     }
 }
