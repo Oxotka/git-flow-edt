@@ -43,11 +43,17 @@
           </target>
           <!-- EDT 2026.1 на этой машине — x86_64 (Rosetta), SWT-классы лежат
                в платформенном фрагменте org.eclipse.swt.cocoa.macosx.x86_64.
-               Пины среду резолва, иначе classpath без SWT → 'missing type Shell'. -->
+               Windows добавлен рядом, чтобы сборку и тесты можно было вести
+               на обеих платформах параллельно. -->
           <environments>
             <environment>
               <os>macosx</os>
               <ws>cocoa</ws>
+              <arch>x86_64</arch>
+            </environment>
+            <environment>
+              <os>win32</os>
+              <ws>win32</ws>
               <arch>x86_64</arch>
             </environment>
           </environments>
