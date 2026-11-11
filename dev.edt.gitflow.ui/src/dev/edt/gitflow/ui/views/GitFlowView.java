@@ -1660,6 +1660,7 @@ public class GitFlowView extends ViewPart
         {
             branchButton.setText(Messages.get("chooseRepository")); //$NON-NLS-1$
             hasRemote = false;
+            mergeRequestPane.hide();
         }
         else
         {
@@ -1667,6 +1668,7 @@ public class GitFlowView extends ViewPart
             {
                 String branch = repository.getBranch();
                 branchButton.setText(branch);
+                mergeRequestPane.refreshIfChanged(repository);
                 BranchConfig config = new BranchConfig(repository.getConfig(), branch);
                 hasRemote = config.getRemoteTrackingBranch() != null || repository.getConfig()
                     .getString("remote", "origin", "url") != null; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -2854,6 +2856,8 @@ public class GitFlowView extends ViewPart
     public void setFocus()
     {
         loadRepositories();
+        if (mergeRequestPane != null)
+            mergeRequestPane.refreshIfChanged(selectedRepository());
         messageField.setFocus();
     }
 

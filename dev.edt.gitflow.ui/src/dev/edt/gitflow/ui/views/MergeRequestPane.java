@@ -41,6 +41,31 @@ final class MergeRequestPane
     private GitLabClient client;
     private String branch;
     private String webUrl;
+    private String lastKey = ""; //$NON-NLS-1$
+
+    /** Обновляет строку, только если сменился репозиторий или ветка. */
+    void refreshIfChanged(Repository repository)
+    {
+        String key = key(repository);
+        if (key.equals(lastKey))
+            return;
+        lastKey = key;
+        refresh(repository);
+    }
+
+    private static String key(Repository repository)
+    {
+        if (repository == null)
+            return ""; //$NON-NLS-1$
+        try
+        {
+            return repository.getDirectory() + "|" + repository.getBranch(); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            return ""; //$NON-NLS-1$
+        }
+    }
 
     MergeRequestPane(Composite parent)
     {
