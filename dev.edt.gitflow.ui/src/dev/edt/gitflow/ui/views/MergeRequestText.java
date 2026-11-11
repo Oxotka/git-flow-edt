@@ -18,8 +18,27 @@ public final class MergeRequestText
 
     public static String describe(MergeRequestStatus status, Function<String, String> messages)
     {
+        return describe(status, messages, false);
+    }
+
+    /** Вариант для SWT Link: номер merge request — кликабельная ссылка. */
+    public static String describeLink(MergeRequestStatus status, Function<String, String> messages)
+    {
+        return describe(status, messages, true);
+    }
+
+    /** Строка «MR не создан» с кликабельным действием создания. */
+    public static String createLink(Function<String, String> messages)
+    {
+        return messages.apply("mergeRequestNotCreated") + " · <a href=\"create\">" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + messages.apply("mergeRequestCreate") + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String describe(MergeRequestStatus status, Function<String, String> messages,
+        boolean links)
+    {
         List<String> parts = new ArrayList<>();
-        parts.add("!" + status.iid()); //$NON-NLS-1$
+        parts.add(links ? "<a href=\"open\">!" + status.iid() + "</a>" : "!" + status.iid()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if ("merged".equals(status.state())) //$NON-NLS-1$
         {
             parts.add(messages.apply("mergeRequestMerged")); //$NON-NLS-1$
