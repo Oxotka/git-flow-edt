@@ -25,6 +25,9 @@ public final class GitLabSettings
     private static final String CERT_FILE = "certFile"; //$NON-NLS-1$
     private static final String TOKEN_PREFIX = "gitlab.token."; //$NON-NLS-1$
 
+    private static volatile GitLabSettings cached;
+    private static final java.util.Map<String, String> TOKENS = new java.util.concurrent.ConcurrentHashMap<>();
+
     private final String baseUrl;
     private final String serverHost;
     private final CertMode certMode;
@@ -51,6 +54,9 @@ public final class GitLabSettings
 
     public static GitLabSettings load()
     {
+        GitLabSettings ready = cached;
+        if (ready != null)
+            return ready;
         Preferences node = InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(NODE);
         String mode = node.get(CERT_MODE, CertMode.WINDOWS.name());
         CertMode certMode;
@@ -62,10 +68,11 @@ public final class GitLabSettings
         {
             certMode = CertMode.WINDOWS;
         }
-        return new GitLabSettings(node.get(BASE_URL, ""), node.get(SERVER_HOST, ""), //$NON-NLS-1$ //$NON-NLS-2$
-            certMode, node.get(CERT_FILE, null));
+        GitLabSettings loaded = new GitLabSettings(node.get(BASE_URL, ""), //$NON-NLS-1$
+            node.get(SERVER_HOST, ""), certMode, node.get(CERT_FILE, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        cached = loaded;
+        return loaded;
     }
-
     public void save(String newBaseUrl, String newServerHost, CertMode newCertMode, String newCertFile)
     {
         Preferences node = InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(NODE);
@@ -82,6 +89,8 @@ public final class GitLabSettings
             throw new IllegalStateException("Не удалось сохранить настройки GitLab.", e); //$NON-NLS-1$
         }
         GitLabSsl.reset();
+        cached = new GitLabSettings(newBaseUrl == null ? "" : newBaseUrl.trim(), //$NON-NLS-1$
+            newServerHost == null ? "" : newServerHost.trim(), newCertMode, newCertFile); //$NON-NLS-1$
     }
 
     public String baseUrl()
@@ -118,10 +127,16 @@ public final class GitLabSettings
 
     public String token(String host)
     {
+        String key = host.trim().toLowerCase();
+        String known = TOKENS.get(key);
+        if (known != null)
+            return known;
         try
         {
             ISecurePreferences node = SecurePreferencesFactory.getDefault().node(PLUGIN_ID);
-            return node.get(TOKEN_PREFIX + host.trim().toLowerCase(), ""); //$NON-NLS-1$
+            String value = node.get(TOKEN_PREFIX + key, ""); //$NON-NLS-1$
+            TOKENS.put(key, value);
+            return value;
         }
         catch (Exception e)
         {
@@ -134,8 +149,10 @@ public final class GitLabSettings
         try
         {
             ISecurePreferences node = SecurePreferencesFactory.getDefault().node(PLUGIN_ID);
-            node.put(TOKEN_PREFIX + host.trim().toLowerCase(), token == null ? "" : token.trim(), true); //$NON-NLS-1$
+            String clean = token == null ? "" : token.trim(); //$NON-NLS-1$
+            node.put(TOKEN_PREFIX + host.trim().toLowerCase(), clean, true);
             node.flush();
+            TOKENS.put(host.trim().toLowerCase(), clean);
         }
         catch (Exception e)
         {
