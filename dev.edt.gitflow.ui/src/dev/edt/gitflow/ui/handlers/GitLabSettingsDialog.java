@@ -291,17 +291,8 @@ public final class GitLabSettingsDialog extends Dialog
                             Messages.get("gitLabConnectedMergeRequests")); //$NON-NLS-1$
                         try
                         {
-                            status.append(". ").append(Messages.get("gitLabConnectedAs")) //$NON-NLS-1$ //$NON-NLS-2$
-                                .append(' ').append(client.currentUser());
-                        }
-                        catch (GitLabException e)
-                        {
-                            if (e.kind() == GitLabException.Kind.FORBIDDEN)
-                                status.append(". ").append(Messages.get("gitLabHintUserRead")); //$NON-NLS-1$ //$NON-NLS-2$
-                        }
-                        try
-                        {
                             client.projectMembers();
+                            status.append(". ").append(Messages.get("gitLabMembersAvailable")); //$NON-NLS-1$ //$NON-NLS-2$
                         }
                         catch (GitLabException e)
                         {
