@@ -168,6 +168,7 @@ public class GitFlowView extends ViewPart
     private Button branchButton;
     private Image branchImage;
     private Button syncButton;
+    private MergeRequestPane mergeRequestPane;
     private StyledText messageField;
     private final MessageUndoHistory messageUndoHistory = new MessageUndoHistory();
     private boolean restoringMessageHistory;
@@ -504,6 +505,8 @@ public class GitFlowView extends ViewPart
         repositoryCombo = new Combo(parent, SWT.DROP_DOWN | SWT.READ_ONLY);
         repositoryCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         repositoryCombo.addListener(SWT.Selection, event -> selectRepository(selectedRepository()));
+        mergeRequestPane = new MergeRequestPane(parent);
+        syncButton.addListener(SWT.Selection, event -> mergeRequestPane.refresh(selectedRepository()));
 
         SashForm messageSplit = new SashForm(parent, SWT.VERTICAL);
         messageSplit.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
