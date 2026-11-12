@@ -30,7 +30,7 @@ public final class MergeRequestText
     /** Ссылка для создания merge request. */
     public static String createLink(Function<String, String> messages)
     {
-        return "<a href=\"create\">" + messages.apply("mergeRequestCreate") + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "<a href=\"create\">" + messages.apply("mergeRequestCreateLink") + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     private static String describe(MergeRequestStatus status, Function<String, String> messages,
