@@ -22,6 +22,7 @@ import org.eclipse.swt.widgets.Link;
 import dev.edt.gitflow.core.GitLabClient;
 import dev.edt.gitflow.core.GitLabException;
 import dev.edt.gitflow.core.GitLabRemote;
+import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
 import dev.edt.gitflow.ui.handlers.GitLabSettings;
 import dev.edt.gitflow.ui.handlers.GitLabSsl;
@@ -41,7 +42,7 @@ final class MergeRequestPane
     private final Link link;
     private boolean refreshing;
     private Repository repository;
-    private GitLabClient client;
+    private MergeRequestProvider client;
     private String branch;
     private String webUrl;
     private String lastKey = ""; //$NON-NLS-1$
@@ -98,7 +99,7 @@ final class MergeRequestPane
                 String text;
                 String url = null;
                 boolean present = false;
-                GitLabClient created = null;
+                MergeRequestProvider created = null;
                 String sourceBranch = null;
                 try
                 {
@@ -143,7 +144,7 @@ final class MergeRequestPane
                 final String result = text;
                 final String address = url;
                 final boolean exists = present;
-                final GitLabClient readyClient = created;
+                final MergeRequestProvider readyClient = created;
                 final String readyBranch = sourceBranch;
                 display.asyncExec(() ->
                 {

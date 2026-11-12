@@ -24,7 +24,7 @@ import com.google.gson.JsonParser;
  * Клиент GitLab REST API. Сетевые вызовы синхронные: их запускает фоновая
  * задача, а не поток интерфейса.
  */
-public final class GitLabClient
+public final class GitLabClient implements MergeRequestProvider
 {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
 
@@ -61,6 +61,24 @@ public final class GitLabClient
     public GitLabRemote remote()
     {
         return remote;
+    }
+
+    @Override
+    public String host()
+    {
+        return remote.host();
+    }
+
+    @Override
+    public String projectPath()
+    {
+        return remote.projectPath();
+    }
+
+    @Override
+    public String providerName()
+    {
+        return "GitLab"; //$NON-NLS-1$
     }
 
     public String currentUser() throws GitLabException

@@ -24,6 +24,7 @@ import org.eclipse.swt.widgets.Text;
 import dev.edt.gitflow.core.CreateMergeRequest;
 import dev.edt.gitflow.core.GitLabClient;
 import dev.edt.gitflow.core.GitLabException;
+import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
 import dev.edt.gitflow.core.ProjectMember;
 import dev.edt.gitflow.ui.handlers.Messages;
@@ -35,7 +36,7 @@ import dev.edt.gitflow.ui.handlers.ReviewerCache;
  */
 final class MergeRequestCreateDialog extends Dialog
 {
-    private final GitLabClient client;
+    private final MergeRequestProvider client;
     private final String sourceBranch;
     private final String suggestedTitle;
     private final List<String> targets;
@@ -50,7 +51,7 @@ final class MergeRequestCreateDialog extends Dialog
     private final List<ProjectMember> reviewerOptions = new ArrayList<>();
     private MergeRequestStatus created;
 
-    MergeRequestCreateDialog(Shell shell, GitLabClient client, String sourceBranch,
+    MergeRequestCreateDialog(Shell shell, MergeRequestProvider client, String sourceBranch,
         String suggestedTitle, List<String> targets)
     {
         super(shell);
@@ -126,7 +127,7 @@ final class MergeRequestCreateDialog extends Dialog
 
     private void loadReviewers()
     {
-        String projectPath = client.remote().projectPath();
+        String projectPath = client.projectPath();
         for (ProjectMember member : ReviewerCache.recent(projectPath))
             reviewerOptions.add(member);
         applyReviewerOptions();
@@ -310,7 +311,7 @@ final class MergeRequestCreateDialog extends Dialog
                     created = value;
                     ProjectMember chosen = selectedReviewer();
                     if (chosen != null)
-                        ReviewerCache.remember(client.remote().projectPath(), chosen);
+                        ReviewerCache.remember(client.projectPath(), chosen);
                     okPressedDone();
                 });
                 return Status.OK_STATUS;
@@ -332,7 +333,7 @@ final class MergeRequestCreateDialog extends Dialog
         createButton(parent, IDialogConstants.CANCEL_ID, IDialogConstants.CANCEL_LABEL, false);
     }
 
-    static MergeRequestStatus open(Shell shell, GitLabClient client, String sourceBranch,
+    static MergeRequestStatus open(Shell shell, MergeRequestProvider client, String sourceBranch,
         String suggestedTitle, List<String> targets)
     {
         MergeRequestCreateDialog dialog = new MergeRequestCreateDialog(shell, client, sourceBranch,
