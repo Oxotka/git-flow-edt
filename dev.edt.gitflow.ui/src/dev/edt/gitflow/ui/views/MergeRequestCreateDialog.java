@@ -98,6 +98,15 @@ final class MergeRequestCreateDialog extends Dialog
         reviewerCombo = new Combo(grid, SWT.DROP_DOWN);
         reviewerCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         reviewerCombo.addListener(SWT.Modify, event -> filterReviewers());
+        // Enter внутри поля выбирает подсказку, а не создает merge request.
+        reviewerCombo.addListener(SWT.KeyDown, event ->
+        {
+            if (event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR)
+            {
+                event.doit = false;
+                selectFirstReviewer();
+            }
+        });
         reviewerLabel.setVisible(false);
         reviewerCombo.setVisible(false);
         loadReviewers();
@@ -207,6 +216,16 @@ final class MergeRequestCreateDialog extends Dialog
         }
     }
 
+    /** Берет первую подсказку из отфильтрованного списка. */
+    private void selectFirstReviewer()
+    {
+        if (reviewerCombo.getItemCount() == 0)
+            return;
+        String first = reviewerCombo.getItem(0);
+        reviewerCombo.setText(first);
+        reviewerCombo.setSelection(new org.eclipse.swt.graphics.Point(first.length(), first.length()));
+    }
+
     private ProjectMember selectedReviewer()
     {
         String typed = reviewerCombo.getText().trim();
@@ -233,6 +252,12 @@ final class MergeRequestCreateDialog extends Dialog
         if (title.isEmpty())
         {
             resultLabel.setText(Messages.get("mergeRequestTitleRequired")); //$NON-NLS-1$
+            return;
+        }
+        if (!reviewerOptions.isEmpty() && !reviewerCombo.getText().isBlank()
+            && selectedReviewer() == null)
+        {
+            resultLabel.setText(Messages.get("mergeRequestReviewerRequired")); //$NON-NLS-1$
             return;
         }
         CreateMergeRequest request = new CreateMergeRequest(sourceBranch,
