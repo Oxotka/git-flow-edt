@@ -109,7 +109,8 @@ final class MergeRequestPane
                     String token = gitLab == null ? "" : settings.token(gitLab.host()); //$NON-NLS-1$
                     sourceBranch = branchName(currentRepository);
                     if (gitLab == null || !settings.matches(gitLab.host()) || token.isBlank()
-                        || sourceBranch == null || isIntegrationBranch(sourceBranch))
+                        || sourceBranch == null || isIntegrationBranch(sourceBranch)
+                        || !matchesPrefix(sourceBranch, settings))
                     {
                         display.asyncExec(() ->
                         {
@@ -169,7 +170,7 @@ final class MergeRequestPane
         if (repository == null || client == null || branch == null)
             return;
         MergeRequestStatus created = MergeRequestCreateDialog.open(composite.getShell(), client,
-            branch, lastCommitSubject(repository));
+            branch, lastCommitSubject(repository), targetBranches(repository));
         if (created != null)
             refresh(repository);
     }
@@ -246,6 +247,40 @@ final class MergeRequestPane
         {
             return null;
         }
+    }
+
+    /** Ветки, для которых предлагается merge request. */
+    private static boolean matchesPrefix(String branch, GitLabSettings settings)
+    {
+        for (String prefix : settings.branchPrefixes())
+        {
+            String clean = prefix.trim();
+            if (!clean.isEmpty() && branch.startsWith(clean))
+                return true;
+        }
+        return false;
+    }
+
+    /** Целевые ветки: master и ветки origin, без служебного HEAD. */
+    private static java.util.List<String> targetBranches(Repository repository)
+    {
+        java.util.LinkedHashSet<String> result = new java.util.LinkedHashSet<>();
+        result.add("master"); //$NON-NLS-1$
+        try
+        {
+            String prefix = "refs/remotes/origin/"; //$NON-NLS-1$
+            for (var ref : repository.getRefDatabase().getRefsByPrefix(prefix))
+            {
+                String name = ref.getName().substring(prefix.length());
+                if (!"HEAD".equals(name)) //$NON-NLS-1$
+                    result.add(name);
+            }
+        }
+        catch (Exception e)
+        {
+            // Без удаленных веток останется только master.
+        }
+        return new java.util.ArrayList<>(result);
     }
 
     private static boolean isIntegrationBranch(String branch)

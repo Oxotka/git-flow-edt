@@ -38,9 +38,10 @@ final class MergeRequestCreateDialog extends Dialog
     private final GitLabClient client;
     private final String sourceBranch;
     private final String suggestedTitle;
+    private final List<String> targets;
     private Text titleField;
     private Text descriptionField;
-    private Text targetField;
+    private Combo targetField;
     private Button draftButton;
     private Button removeBranchButton;
     private Label resultLabel;
@@ -50,12 +51,13 @@ final class MergeRequestCreateDialog extends Dialog
     private MergeRequestStatus created;
 
     MergeRequestCreateDialog(Shell shell, GitLabClient client, String sourceBranch,
-        String suggestedTitle)
+        String suggestedTitle, List<String> targets)
     {
         super(shell);
         this.client = client;
         this.sourceBranch = sourceBranch;
         this.suggestedTitle = suggestedTitle;
+        this.targets = targets;
         setShellStyle(getShellStyle() | SWT.RESIZE);
     }
 
@@ -80,9 +82,10 @@ final class MergeRequestCreateDialog extends Dialog
         titleField.setText(suggestedTitle);
 
         new Label(grid, SWT.NONE).setText(Messages.get("mergeRequestTarget")); //$NON-NLS-1$
-        targetField = new Text(grid, SWT.BORDER);
+        targetField = new Combo(grid, SWT.DROP_DOWN);
         targetField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        targetField.setText("master"); //$NON-NLS-1$
+        targetField.setItems(targets.toArray(new String[0]));
+        targetField.setText(targets.isEmpty() ? "master" : targets.get(0)); //$NON-NLS-1$
 
         new Label(grid, SWT.NONE).setText(Messages.get("mergeRequestDescription")); //$NON-NLS-1$
         descriptionField = new Text(grid, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
@@ -92,8 +95,9 @@ final class MergeRequestCreateDialog extends Dialog
 
         reviewerLabel = new Label(grid, SWT.NONE);
         reviewerLabel.setText(Messages.get("mergeRequestReviewer")); //$NON-NLS-1$
-        reviewerCombo = new Combo(grid, SWT.DROP_DOWN | SWT.READ_ONLY);
+        reviewerCombo = new Combo(grid, SWT.DROP_DOWN);
         reviewerCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        reviewerCombo.addListener(SWT.Modify, event -> filterReviewers());
         reviewerLabel.setVisible(false);
         reviewerCombo.setVisible(false);
         loadReviewers();
@@ -177,12 +181,44 @@ final class MergeRequestCreateDialog extends Dialog
         reviewerCombo.getParent().layout();
     }
 
+    private boolean filtering;
+
+    /** Подсказки в списке проверяющих фильтруются по введенному тексту. */
+    private void filterReviewers()
+    {
+        if (filtering || reviewerOptions.isEmpty())
+            return;
+        String typed = reviewerCombo.getText();
+        filtering = true;
+        try
+        {
+            String[] all = reviewerOptions.stream().map(ProjectMember::displayName)
+                .toArray(String[]::new);
+            String lower = typed.toLowerCase();
+            String[] matching = typed.isEmpty() ? all : java.util.Arrays.stream(all)
+                .filter(name -> name.toLowerCase().contains(lower)).toArray(String[]::new);
+            reviewerCombo.setItems(matching);
+            reviewerCombo.setText(typed);
+            reviewerCombo.setSelection(new org.eclipse.swt.graphics.Point(typed.length(), typed.length()));
+        }
+        finally
+        {
+            filtering = false;
+        }
+    }
+
     private ProjectMember selectedReviewer()
     {
-        int index = reviewerCombo.getSelectionIndex();
-        if (index < 0 || index >= reviewerOptions.size())
+        String typed = reviewerCombo.getText().trim();
+        if (typed.isEmpty())
             return null;
-        return reviewerOptions.get(index);
+        for (ProjectMember member : reviewerOptions)
+        {
+            if (typed.equalsIgnoreCase(member.displayName())
+                || typed.equalsIgnoreCase(member.username()))
+                return member;
+        }
+        return null;
     }
 
     MergeRequestStatus created()
@@ -272,10 +308,10 @@ final class MergeRequestCreateDialog extends Dialog
     }
 
     static MergeRequestStatus open(Shell shell, GitLabClient client, String sourceBranch,
-        String suggestedTitle)
+        String suggestedTitle, List<String> targets)
     {
         MergeRequestCreateDialog dialog = new MergeRequestCreateDialog(shell, client, sourceBranch,
-            suggestedTitle);
+            suggestedTitle, targets);
         return dialog.open() == OK ? dialog.created() : null;
     }
 

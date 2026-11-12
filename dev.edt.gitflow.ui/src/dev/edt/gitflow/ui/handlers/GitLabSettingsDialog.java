@@ -42,6 +42,7 @@ public final class GitLabSettingsDialog extends Dialog
     private Text tokenField;
     private Link certificateLink;
     private Link tokenLink;
+    private Text prefixesField;
     private Label resultLabel;
 
     private GitLabSettingsDialog(Shell shell, Repository repository)
@@ -103,6 +104,12 @@ public final class GitLabSettingsDialog extends Dialog
         tokenLink.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false, 2, 1));
         tokenLink.setText(link(Messages.get("gitLabTokenWhere"))); //$NON-NLS-1$
         tokenLink.addListener(SWT.Selection, event -> openTokenPage());
+
+        new Label(grid, SWT.NONE).setText(Messages.get("gitLabBranchPrefixes")); //$NON-NLS-1$
+        prefixesField = new Text(grid, SWT.BORDER);
+        prefixesField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        prefixesField.setText(String.join(", ", settings.branchPrefixes())); //$NON-NLS-1$
+        prefixesField.setToolTipText(Messages.get("gitLabBranchPrefixesHint")); //$NON-NLS-1$
 
         certificateLink = new Link(grid, SWT.NONE);
         certificateLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -355,6 +362,7 @@ public final class GitLabSettingsDialog extends Dialog
             return;
         }
         settings.save(remote.webBase(), remote.host(), settings.certMode(), settings.certFile());
+        settings.saveBranchPrefixes(prefixesField.getText());
         String token = effectiveToken();
         if (!token.isEmpty())
         {

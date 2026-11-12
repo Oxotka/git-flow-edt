@@ -1,5 +1,7 @@
 package dev.edt.gitflow.ui.handlers;
 
+import java.util.List;
+
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.equinox.security.storage.ISecurePreferences;
 import org.eclipse.equinox.security.storage.SecurePreferencesFactory;
@@ -24,6 +26,7 @@ public final class GitLabSettings
     private static final String CERT_MODE = "certMode"; //$NON-NLS-1$
     private static final String CERT_FILE = "certFile"; //$NON-NLS-1$
     private static final String TOKEN_PREFIX = "gitlab.token."; //$NON-NLS-1$
+    private static final String BRANCH_PREFIXES = "branchPrefixes"; //$NON-NLS-1$
 
     private static volatile GitLabSettings cached;
     private static final java.util.Map<String, String> TOKENS = new java.util.concurrent.ConcurrentHashMap<>();
@@ -91,6 +94,42 @@ public final class GitLabSettings
         GitLabSsl.reset();
         cached = new GitLabSettings(newBaseUrl == null ? "" : newBaseUrl.trim(), //$NON-NLS-1$
             newServerHost == null ? "" : newServerHost.trim(), newCertMode, newCertFile); //$NON-NLS-1$
+    }
+
+    public static synchronized List<String> defaultBranchPrefixes()
+    {
+        return List.of("fix/", "feat/"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Префиксы веток, для которых предлагается создать merge request. */
+    public List<String> branchPrefixes()
+    {
+        String stored = InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(NODE)
+            .get(BRANCH_PREFIXES, ""); //$NON-NLS-1$
+        if (stored.isBlank())
+            return defaultBranchPrefixes();
+        List<String> result = new java.util.ArrayList<>();
+        for (String part : stored.split(",")) //$NON-NLS-1$
+        {
+            String prefix = part.trim();
+            if (!prefix.isEmpty())
+                result.add(prefix);
+        }
+        return result.isEmpty() ? defaultBranchPrefixes() : result;
+    }
+
+    public void saveBranchPrefixes(String prefixes)
+    {
+        Preferences node = InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(NODE);
+        node.put(BRANCH_PREFIXES, prefixes == null ? "" : prefixes.trim()); //$NON-NLS-1$
+        try
+        {
+            node.flush();
+        }
+        catch (BackingStoreException e)
+        {
+            throw new IllegalStateException("Не удалось сохранить список веток.", e); //$NON-NLS-1$
+        }
     }
 
     public String baseUrl()

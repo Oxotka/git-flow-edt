@@ -27,11 +27,10 @@ public final class MergeRequestText
         return describe(status, messages, true);
     }
 
-    /** Строка «MR не создан» с кликабельным действием создания. */
+    /** Ссылка для создания merge request. */
     public static String createLink(Function<String, String> messages)
     {
-        return messages.apply("mergeRequestNotCreated") + " · <a href=\"create\">" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + messages.apply("mergeRequestCreate") + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$
+        return "<a href=\"create\">" + messages.apply("mergeRequestCreate") + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     private static String describe(MergeRequestStatus status, Function<String, String> messages,
