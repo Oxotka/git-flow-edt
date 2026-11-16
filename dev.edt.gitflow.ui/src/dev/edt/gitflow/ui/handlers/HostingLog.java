@@ -11,14 +11,15 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 
 /**
- * Диагностический журнал подключения к GitLab. Пишется в файл в домашнем
+ * Диагностический журнал подключения к хостингу. Пишется в файл в домашнем
  * каталоге пользователя: по нему видно, что именно произошло при проверке.
+ * Имя файла оставлено прежним, чтобы журнал GitLab оставался на месте.
  */
-public final class GitLabLog
+public final class HostingLog
 {
     private static final String FILE_NAME = "gitflow-gitlab.log"; //$NON-NLS-1$
 
-    private GitLabLog()
+    private HostingLog()
     {
     }
 

@@ -17,7 +17,8 @@ import dev.edt.gitflow.core.ProjectMember;
 public final class ReviewerCache
 {
     private static final String PLUGIN_ID = "dev.edt.gitflow.ui"; //$NON-NLS-1$
-    private static final String NODE = "gitlab"; //$NON-NLS-1$
+    private static final String NODE = "hosting"; //$NON-NLS-1$
+    private static final String LEGACY_NODE = "gitlab"; //$NON-NLS-1$
     private static final String PREFIX = "reviewers."; //$NON-NLS-1$
     private static final int LIMIT = 8;
 
@@ -31,6 +32,11 @@ public final class ReviewerCache
         if (projectPath == null || projectPath.isBlank())
             return result;
         String stored = node().get(PREFIX + projectPath, ""); //$NON-NLS-1$
+        if (stored.isEmpty())
+        {
+            // Кеш, сохраненный прежней версией плагина для GitLab.
+            stored = legacyNode().get(PREFIX + projectPath, ""); //$NON-NLS-1$
+        }
         for (String entry : stored.split(";")) //$NON-NLS-1$
         {
             String[] parts = entry.split("\\|"); //$NON-NLS-1$
@@ -81,5 +87,10 @@ public final class ReviewerCache
     private static Preferences node()
     {
         return InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(NODE);
+    }
+
+    private static Preferences legacyNode()
+    {
+        return InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(LEGACY_NODE);
     }
 }

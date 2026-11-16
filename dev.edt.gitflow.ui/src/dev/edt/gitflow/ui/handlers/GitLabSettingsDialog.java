@@ -37,7 +37,7 @@ import dev.edt.gitflow.core.HostingException;
 public final class GitLabSettingsDialog extends Dialog
 {
     private final Repository repository;
-    private GitLabSettings settings;
+    private HostingSettings settings;
     private Text serverField;
     private Text tokenField;
     private Link certificateLink;
@@ -49,7 +49,7 @@ public final class GitLabSettingsDialog extends Dialog
     {
         super(shell);
         this.repository = repository;
-        this.settings = GitLabSettings.load();
+        this.settings = HostingSettings.load();
         setShellStyle(getShellStyle() | SWT.RESIZE);
     }
 
@@ -196,7 +196,7 @@ public final class GitLabSettingsDialog extends Dialog
     {
         if (certificateLink == null || certificateLink.isDisposed())
             return;
-        boolean file = settings.certMode() == GitLabSettings.CertMode.FILE
+        boolean file = settings.certMode() == HostingSettings.CertMode.FILE
             && settings.certFile() != null && !settings.certFile().isBlank();
         String text = file
             ? String.format(Messages.get("gitLabCertificateFileLink"), //$NON-NLS-1$
@@ -211,11 +211,11 @@ public final class GitLabSettingsDialog extends Dialog
         Menu menu = new Menu(certificateLink);
         MenuItem system = new MenuItem(menu, SWT.RADIO);
         system.setText(Messages.get("gitLabCertificateWindows")); //$NON-NLS-1$
-        system.setSelection(settings.certMode() != GitLabSettings.CertMode.FILE);
+        system.setSelection(settings.certMode() != HostingSettings.CertMode.FILE);
         system.addListener(SWT.Selection, event -> useSystemCertificates());
         MenuItem file = new MenuItem(menu, SWT.RADIO);
         file.setText(Messages.get("gitLabCertificateChoose")); //$NON-NLS-1$
-        file.setSelection(settings.certMode() == GitLabSettings.CertMode.FILE);
+        file.setSelection(settings.certMode() == HostingSettings.CertMode.FILE);
         file.addListener(SWT.Selection, event -> chooseCertificateFile());
         menu.setLocation(certificateLink.toDisplay(0, certificateLink.getSize().y));
         menu.setVisible(true);
@@ -223,8 +223,8 @@ public final class GitLabSettingsDialog extends Dialog
 
     private void useSystemCertificates()
     {
-        settings = GitLabSettings.forTesting(serverField.getText(), host(),
-            GitLabSettings.CertMode.WINDOWS, ""); //$NON-NLS-1$
+        settings = HostingSettings.forTesting(serverField.getText(), host(),
+            HostingSettings.CertMode.WINDOWS, ""); //$NON-NLS-1$
         updateCertificateLink();
     }
 
@@ -235,8 +235,8 @@ public final class GitLabSettingsDialog extends Dialog
         String selected = dialog.open();
         if (selected == null)
             return;
-        settings = GitLabSettings.forTesting(serverField.getText(), host(),
-            GitLabSettings.CertMode.FILE, selected);
+        settings = HostingSettings.forTesting(serverField.getText(), host(),
+            HostingSettings.CertMode.FILE, selected);
         updateCertificateLink();
     }
 
@@ -256,7 +256,7 @@ public final class GitLabSettingsDialog extends Dialog
             resultLabel.setText(Messages.get("gitLabServerUnknown")); //$NON-NLS-1$
             return;
         }
-        GitLabSettings candidate = settings;
+        HostingSettings candidate = settings;
         // Значения полей читаем на потоке UI: из фоновой задачи обращаться к
         // элементам SWT нельзя.
         final String token = effectiveToken();
@@ -281,14 +281,14 @@ public final class GitLabSettingsDialog extends Dialog
                 try
                 {
                     GitLabRemote projectRemote = repositoryRemote();
-                    GitLabLog.write("check start: server=" + remote.webBase() //$NON-NLS-1$
+                    HostingLog.write("check start: server=" + remote.webBase() //$NON-NLS-1$
                         + " project=" + (projectRemote == null ? "нет" : projectRemote.projectPath()) //$NON-NLS-1$ //$NON-NLS-2$
                         + " host=" + remote.host() //$NON-NLS-1$
                         + " tokenLength=" + token.length() //$NON-NLS-1$
                         + " certMode=" + candidate.certMode()); //$NON-NLS-1$
                     GitLabClient client = new GitLabClient(
                         projectRemote == null ? remote : projectRemote, token,
-                        GitLabSsl.context(candidate), Duration.ofSeconds(10));
+                        HostingSsl.context(candidate), Duration.ofSeconds(10));
                     // Проверяем именно то, ради чего нужен токен: доступ к merge
                     // requests проекта. Право User: Read для этого не требуется.
                     if (projectRemote != null && branch != null)
@@ -315,12 +315,12 @@ public final class GitLabSettingsDialog extends Dialog
                 }
                 catch (HostingException e)
                 {
-                    GitLabLog.write("gitlab error: " + e.kind(), e); //$NON-NLS-1$
+                    HostingLog.write("gitlab error: " + e.kind(), e); //$NON-NLS-1$
                     text = textFor(e);
                 }
                 catch (Exception e)
                 {
-                    GitLabLog.write("unexpected error", e); //$NON-NLS-1$
+                    HostingLog.write("unexpected error", e); //$NON-NLS-1$
                     text = Messages.get("gitLabUnreachable") + " [" //$NON-NLS-1$ //$NON-NLS-2$
                         + e.getClass().getSimpleName() + ": " + e.getMessage() + "]"; //$NON-NLS-1$ //$NON-NLS-2$
                 }
@@ -361,7 +361,9 @@ public final class GitLabSettingsDialog extends Dialog
             resultLabel.setText(Messages.get("gitLabServerUnknown")); //$NON-NLS-1$
             return;
         }
-        settings.save(remote.webBase(), remote.host(), settings.certMode(), settings.certFile());
+        // Пока форма остается формой GitLab: тип хостинга берется из настроек.
+        settings.save(remote.webBase(), remote.host(), settings.provider(remote.host()),
+            settings.certMode(), settings.certFile());
         settings.saveBranchPrefixes(prefixesField.getText());
         String token = effectiveToken();
         if (!token.isEmpty())

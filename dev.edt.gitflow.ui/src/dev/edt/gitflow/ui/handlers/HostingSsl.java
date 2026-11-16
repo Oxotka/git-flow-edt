@@ -11,16 +11,16 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
 
 /**
- * Доверие серверу GitLab. На Windows берется системное хранилище, на остальных
+ * Доверие серверу хостинга. На Windows берется системное хранилище, на остальных
  * платформах — файл сертификата из настроек. Проверка сертификата не отключается
  * никогда.
  */
-public final class GitLabSsl
+public final class HostingSsl
 {
     private static String cachedKey;
     private static SSLContext cachedContext;
 
-    private GitLabSsl()
+    private HostingSsl()
     {
     }
 
@@ -28,7 +28,7 @@ public final class GitLabSsl
      * Контекст строится один раз на режим сертификата: чтение хранилища Windows
      * заметно дорого, а настройки меняются редко.
      */
-    public static synchronized SSLContext context(GitLabSettings settings) throws Exception
+    public static synchronized SSLContext context(HostingSettings settings) throws Exception
     {
         String key = settings.certMode() + "|" //$NON-NLS-1$
             + (settings.certFile() == null ? "" : settings.certFile()); //$NON-NLS-1$
@@ -47,12 +47,12 @@ public final class GitLabSsl
         cachedContext = null;
     }
 
-    private static SSLContext build(GitLabSettings settings) throws Exception
+    private static SSLContext build(HostingSettings settings) throws Exception
     {
-        if (settings.certMode() == GitLabSettings.CertMode.FILE
+        if (settings.certMode() == HostingSettings.CertMode.FILE
             && settings.certFile() != null && !settings.certFile().isBlank())
             return fromFile(Path.of(settings.certFile()));
-        if (settings.certMode() == GitLabSettings.CertMode.WINDOWS)
+        if (settings.certMode() == HostingSettings.CertMode.WINDOWS)
             return fromWindowsStore();
         return null;
     }
@@ -73,7 +73,7 @@ public final class GitLabSsl
             int index = 0;
             for (Certificate certificate : CertificateFactory.getInstance("X.509") //$NON-NLS-1$
                 .generateCertificates(in))
-                store.setCertificateEntry("gitlab-" + index++, certificate); //$NON-NLS-1$
+                store.setCertificateEntry("hosting-" + index++, certificate); //$NON-NLS-1$
         }
         return contextFor(store);
     }

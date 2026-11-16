@@ -24,8 +24,8 @@ import dev.edt.gitflow.core.GitLabRemote;
 import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
-import dev.edt.gitflow.ui.handlers.GitLabSettings;
-import dev.edt.gitflow.ui.handlers.GitLabSsl;
+import dev.edt.gitflow.ui.handlers.HostingSettings;
+import dev.edt.gitflow.ui.handlers.HostingSsl;
 import dev.edt.gitflow.ui.handlers.Messages;
 
 /**
@@ -106,7 +106,7 @@ final class MergeRequestPane
                     String remote = currentRepository.getConfig()
                         .getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     GitLabRemote gitLab = remote == null ? null : parse(remote);
-                    GitLabSettings settings = GitLabSettings.load();
+                    HostingSettings settings = HostingSettings.load();
                     String token = gitLab == null ? "" : settings.token(gitLab.host()); //$NON-NLS-1$
                     sourceBranch = branchName(currentRepository);
                     if (gitLab == null || !settings.matches(gitLab.host()) || token.isBlank()
@@ -120,7 +120,7 @@ final class MergeRequestPane
                         });
                         return Status.OK_STATUS;
                     }
-                    created = new GitLabClient(gitLab, token, GitLabSsl.context(settings),
+                    created = new GitLabClient(gitLab, token, HostingSsl.context(settings),
                         Duration.ofSeconds(10));
                     Optional<MergeRequestStatus> status = created.statusForBranch(sourceBranch);
                     if (status.isPresent())
@@ -251,7 +251,7 @@ final class MergeRequestPane
     }
 
     /** Ветки, для которых предлагается merge request. */
-    private static boolean matchesPrefix(String branch, GitLabSettings settings)
+    private static boolean matchesPrefix(String branch, HostingSettings settings)
     {
         for (String prefix : settings.branchPrefixes())
         {
