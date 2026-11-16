@@ -4,13 +4,19 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.util.List;
+
+import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.junit.Test;
+import org.osgi.service.prefs.Preferences;
 
 import dev.edt.gitflow.core.HostingProvider;
 import dev.edt.gitflow.ui.handlers.HostingSettings;
 
 public class HostingSettingsTest
 {
+    private static final String PLUGIN_ID = "dev.edt.gitflow.ui"; //$NON-NLS-1$
+
     @Test
     public void matchesOnlyConfiguredHost()
     {
@@ -32,6 +38,89 @@ public class HostingSettingsTest
     }
 
     @Test
+    public void exposesConfiguredProviderForConfiguredHost()
+    {
+        // Хост не распознается по имени: тип задан настройками.
+        var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
+            "akeso.dept07", HostingProvider.GITHUB); //$NON-NLS-1$
+        assertEquals(HostingProvider.GITHUB, settings.provider("akeso.dept07")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void fallsBackToGitLabForForeignHost()
+    {
+        // Настроен GitHub, но чужой нераспознанный хост — это GitLab по умолчанию.
+        var settings = HostingSettings.forTesting("https://github.com", //$NON-NLS-1$
+            "github.com", HostingProvider.GITHUB); //$NON-NLS-1$
+        assertEquals(HostingProvider.GITLAB, settings.provider("scm.local")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void readsStoredProviderForHost()
+    {
+        Preferences node = preferences("hosting"); //$NON-NLS-1$
+        String key = "provider.scm.local"; //$NON-NLS-1$
+        String previous = node.get(key, null);
+        node.put(key, HostingProvider.GITHUB.name());
+        try
+        {
+            var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
+                "akeso.dept07", HostingProvider.GITLAB); //$NON-NLS-1$
+            assertEquals(HostingProvider.GITHUB, settings.provider("scm.local")); //$NON-NLS-1$
+        }
+        finally
+        {
+            restore(node, key, previous);
+        }
+    }
+
+    @Test
+    public void readsLegacyBranchPrefixesWhenNewKeyAbsent()
+    {
+        Preferences hosting = preferences("hosting"); //$NON-NLS-1$
+        Preferences legacy = preferences("gitlab"); //$NON-NLS-1$
+        String oldHosting = hosting.get("branchPrefixes", null); //$NON-NLS-1$
+        String oldLegacy = legacy.get("branchPrefixes", null); //$NON-NLS-1$
+        hosting.remove("branchPrefixes"); //$NON-NLS-1$
+        legacy.put("branchPrefixes", "release/"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
+                "akeso.dept07", HostingProvider.GITLAB); //$NON-NLS-1$
+            assertEquals(List.of("release/"), settings.branchPrefixes()); //$NON-NLS-1$
+        }
+        finally
+        {
+            restore(hosting, "branchPrefixes", oldHosting); //$NON-NLS-1$
+            restore(legacy, "branchPrefixes", oldLegacy); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void doesNotRestoreLegacyBranchPrefixesAfterClearing()
+    {
+        // Пользователь очистил поле: должны вернуться значения по умолчанию,
+        // а не прежние префиксы GitLab.
+        Preferences hosting = preferences("hosting"); //$NON-NLS-1$
+        Preferences legacy = preferences("gitlab"); //$NON-NLS-1$
+        String oldHosting = hosting.get("branchPrefixes", null); //$NON-NLS-1$
+        String oldLegacy = legacy.get("branchPrefixes", null); //$NON-NLS-1$
+        hosting.put("branchPrefixes", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        legacy.put("branchPrefixes", "release/"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
+                "akeso.dept07", HostingProvider.GITLAB); //$NON-NLS-1$
+            assertEquals(HostingSettings.defaultBranchPrefixes(), settings.branchPrefixes());
+        }
+        finally
+        {
+            restore(hosting, "branchPrefixes", oldHosting); //$NON-NLS-1$
+            restore(legacy, "branchPrefixes", oldLegacy); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void exposesConfiguredValues()
     {
         var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
@@ -39,5 +128,18 @@ public class HostingSettingsTest
         assertEquals("https://akeso.dept07", settings.baseUrl()); //$NON-NLS-1$
         assertEquals(HostingSettings.CertMode.WINDOWS, settings.certMode());
         assertEquals("akeso.dept07", settings.serverHost()); //$NON-NLS-1$
+    }
+
+    private static Preferences preferences(String node)
+    {
+        return InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(node);
+    }
+
+    private static void restore(Preferences node, String key, String previous)
+    {
+        if (previous == null)
+            node.remove(key);
+        else
+            node.put(key, previous);
     }
 }

@@ -81,11 +81,15 @@ public final class HostingSettings
             return ready;
         Preferences node = hostingNode();
         Preferences legacy = legacyNode();
-        String baseUrl = node.get(BASE_URL, ""); //$NON-NLS-1$
-        if (baseUrl.isBlank())
+        String baseUrl = node.get(BASE_URL, null);
+        if (baseUrl == null)
+        {
+            // Новый ключ отсутствует: читаем прежний адрес GitLab. Сохраненное
+            // пустое значение — это осознанная очистка, его не подменяем.
             baseUrl = legacy.get(BASE_URL, ""); //$NON-NLS-1$
-        String serverHost = node.get(SERVER_HOST, ""); //$NON-NLS-1$
-        if (serverHost.isBlank())
+        }
+        String serverHost = node.get(SERVER_HOST, null);
+        if (serverHost == null)
             serverHost = legacy.get(SERVER_HOST, ""); //$NON-NLS-1$
         String mode = node.get(CERT_MODE, null);
         if (mode == null)
@@ -141,10 +145,12 @@ public final class HostingSettings
     /** Префиксы веток, для которых предлагается создать merge request. */
     public List<String> branchPrefixes()
     {
-        String stored = hostingNode().get(BRANCH_PREFIXES, ""); //$NON-NLS-1$
-        if (stored.isBlank())
-            stored = legacyNode().get(BRANCH_PREFIXES, ""); //$NON-NLS-1$
-        if (stored.isBlank())
+        String stored = hostingNode().get(BRANCH_PREFIXES, null);
+        if (stored == null)
+            stored = legacyNode().get(BRANCH_PREFIXES, null);
+        // Сохраненное пустое значение означает очистку поля: значения по умолчанию,
+        // а не прежние префиксы GitLab.
+        if (stored == null || stored.isBlank())
             return defaultBranchPrefixes();
         List<String> result = new ArrayList<>();
         for (String part : stored.split(",")) //$NON-NLS-1$
@@ -204,8 +210,9 @@ public final class HostingSettings
 
     /**
      * Тип хостинга для адреса: сохраненный для этого хоста, затем распознанный
-     * по хосту, затем по настроенному серверу. Если ничего не распознано,
-     * остается тип, с которым созданы настройки.
+     * по хосту. Для своего сервера дополнительно учитывается тип из настроек,
+     * а для чужого нераспознанного хоста остается GitLab: токен и адрес другого
+     * хостинга к нему не относятся.
      */
     public HostingProvider provider(String host)
     {
@@ -213,12 +220,13 @@ public final class HostingSettings
         if (stored != null)
             return stored;
         HostingProvider detected = HostingProvider.detect(host);
+        if (detected == null && matches(host))
+            detected = HostingProvider.detect(serverHost);
         if (detected != null)
             return detected;
-        detected = HostingProvider.detect(serverHost);
-        if (detected != null)
-            return detected;
-        return provider;
+        if (matches(host) && provider != null)
+            return provider;
+        return HostingProvider.GITLAB;
     }
 
     public String token(String host)
@@ -230,12 +238,14 @@ public final class HostingSettings
         try
         {
             ISecurePreferences node = secureNode();
-            String value = node.get(TOKEN_PREFIX + key, ""); //$NON-NLS-1$
-            if (value.isEmpty())
+            String value = node.get(TOKEN_PREFIX + key, null);
+            if (value == null)
             {
                 // Токен, сохраненный прежней версией плагина для GitLab.
-                value = node.get(LEGACY_TOKEN_PREFIX + key, ""); //$NON-NLS-1$
+                value = node.get(LEGACY_TOKEN_PREFIX + key, null);
             }
+            if (value == null)
+                value = ""; //$NON-NLS-1$
             TOKENS.put(key, value);
             return value;
         }
