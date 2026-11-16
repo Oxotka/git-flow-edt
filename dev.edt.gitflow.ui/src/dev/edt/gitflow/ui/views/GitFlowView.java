@@ -113,7 +113,7 @@ import dev.edt.gitflow.core.RepositorySupport;
 import dev.edt.gitflow.core.StashOperations;
 import dev.edt.gitflow.core.WorkingChanges;
 import dev.edt.gitflow.core.WorkingChanges.FileChange;
-import dev.edt.gitflow.ui.handlers.GitLabSettingsDialog;
+import dev.edt.gitflow.ui.handlers.HostingSettingsDialog;
 import dev.edt.gitflow.ui.handlers.Messages;
 import dev.edt.gitflow.ui.handlers.OpenLinkHandler;
 import dev.edt.gitflow.ui.handlers.OperationJob;
@@ -1087,10 +1087,10 @@ public class GitFlowView extends ViewPart
             updateCommitMessageStyle();
         });
         new MenuItem(menu, SWT.SEPARATOR);
-        MenuItem gitLab = new MenuItem(menu, SWT.PUSH);
-        gitLab.setText(Messages.get("gitLabSettings")); //$NON-NLS-1$
-        gitLab.addListener(SWT.Selection,
-            event -> GitLabSettingsDialog.open(getSite().getShell(), selectedRepository()));
+        MenuItem hosting = new MenuItem(menu, SWT.PUSH);
+        hosting.setText(Messages.get("hostingSettings")); //$NON-NLS-1$
+        hosting.addListener(SWT.Selection,
+            event -> HostingSettingsDialog.open(getSite().getShell(), selectedRepository()));
         menu.addListener(SWT.Hide, event -> anchor.getDisplay().asyncExec(menu::dispose));
         menu.setLocation(anchor.toDisplay(0, anchor.getSize().y));
         menu.setVisible(true);
