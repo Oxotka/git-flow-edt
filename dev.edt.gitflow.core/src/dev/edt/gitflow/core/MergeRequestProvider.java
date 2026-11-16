@@ -54,4 +54,10 @@ public interface MergeRequestProvider
      * необязателен.
      */
     boolean requiresReviewer();
+
+    /**
+     * Ключ сообщения о нехватке права на создание запроса. Текст содержит
+     * {@code %s} для сокращения запроса: MR или PR.
+     */
+    String writePermissionMessageKey();
 }

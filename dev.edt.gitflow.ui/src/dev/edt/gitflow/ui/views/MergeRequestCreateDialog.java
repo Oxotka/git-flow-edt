@@ -304,9 +304,12 @@ final class MergeRequestCreateDialog extends Dialog
                     error = switch (e.kind())
                     {
                         case BAD_REQUEST -> Messages.get("mergeRequestBranchNotPushed"); //$NON-NLS-1$
-                        case CONFLICT -> Messages.get("mergeRequestAlreadyExists"); //$NON-NLS-1$
+                        case CONFLICT -> String.format(Messages.get("mergeRequestAlreadyExists"), //$NON-NLS-1$
+                            client.requestShortName());
                         case UNAUTHORIZED -> Messages.get("gitLabTokenRejected"); //$NON-NLS-1$
-                        case FORBIDDEN -> Messages.get("gitLabTokenReadOnly"); //$NON-NLS-1$
+                        case FORBIDDEN -> String.format(
+                            Messages.get(client.writePermissionMessageKey()),
+                            client.requestShortName());
                         default -> Messages.get("mergeRequestUnavailable"); //$NON-NLS-1$
                     };
                 }

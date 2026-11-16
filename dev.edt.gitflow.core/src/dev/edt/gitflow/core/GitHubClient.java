@@ -137,6 +137,12 @@ public final class GitHubClient implements MergeRequestProvider
     }
 
     @Override
+    public String writePermissionMessageKey()
+    {
+        return "gitHubCreateForbidden"; //$NON-NLS-1$
+    }
+
+    @Override
     public String currentUser() throws HostingException
     {
         return string(getObject("user"), "login"); //$NON-NLS-1$ //$NON-NLS-2$

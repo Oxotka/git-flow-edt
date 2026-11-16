@@ -106,6 +106,12 @@ public final class GitLabClient implements MergeRequestProvider
     }
 
     @Override
+    public String writePermissionMessageKey()
+    {
+        return "gitLabTokenReadOnly"; //$NON-NLS-1$
+    }
+
+    @Override
     public String currentUser() throws HostingException
     {
         return getObject("user").get("name").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
