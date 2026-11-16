@@ -20,6 +20,15 @@ public class GitHubRemoteTest
     }
 
     @Test
+    public void parsesScpLikeRemote()
+    {
+        var remote = GitHubRemote.parse("git@github.com:owner/repo.git"); //$NON-NLS-1$
+        assertEquals("github.com", remote.host()); //$NON-NLS-1$
+        assertEquals("https://api.github.com", remote.apiBase()); //$NON-NLS-1$
+        assertEquals("owner/repo", remote.projectPath()); //$NON-NLS-1$
+    }
+
+    @Test
     public void buildsEnterpriseApiBase()
     {
         var remote = GitHubRemote.parse("ssh://git@ghe.corp:2222/team/repo.git"); //$NON-NLS-1$

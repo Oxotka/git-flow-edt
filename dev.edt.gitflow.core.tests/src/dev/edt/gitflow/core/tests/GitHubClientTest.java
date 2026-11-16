@@ -8,14 +8,17 @@ import static org.junit.Assert.fail;
 
 import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.nio.file.Files;
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 import org.junit.Test;
 
 import dev.edt.gitflow.core.CreateMergeRequest;
 import dev.edt.gitflow.core.GitHubClient;
 import dev.edt.gitflow.core.GitHubRemote;
+import dev.edt.gitflow.core.HostingDiagnostics;
 import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.MergeRequestStatus;
 import dev.edt.gitflow.core.ProjectMember;
@@ -559,14 +562,54 @@ public class GitHubClientTest
     {
         try (FakeGitHub server = new FakeGitHub())
         {
+            String marker = "reviewer-" + UUID.randomUUID(); //$NON-NLS-1$
             server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
             server.respond(REQUESTED_REVIEWERS, 422, //$NON-NLS-1$
-                "{\"message\":\"Reviews may only be requested from collaborators.\"}"); //$NON-NLS-1$
+                "{\"message\":\"Reviews may only be requested from collaborators. " //$NON-NLS-1$
+                    + marker + "\"}"); //$NON-NLS-1$
             MergeRequestStatus created = server.client().createMergeRequest(
                 new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     .reviewer(new ProjectMember(7, null, "ivan"))); //$NON-NLS-1$
             assertEquals(3, created.iid());
             assertEquals(REQUESTED_REVIEWERS, server.lastPath());
+            String log = Files.readString(HostingDiagnostics.file());
+            assertTrue(log, log.contains("reviewer assignment failed")); //$NON-NLS-1$
+            assertTrue(log, log.contains(marker));
+        }
+    }
+
+    @Test
+    public void keepsCreatedPullRequestWhenReviewerForbidden() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            String marker = "reviewer-" + UUID.randomUUID(); //$NON-NLS-1$
+            server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            server.respond(REQUESTED_REVIEWERS, 403, //$NON-NLS-1$
+                "{\"message\":\"" + marker + "\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRequestStatus created = server.client().createMergeRequest(
+                new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    .reviewer(new ProjectMember(7, null, "ivan"))); //$NON-NLS-1$
+            assertEquals(3, created.iid());
+            String log = Files.readString(HostingDiagnostics.file());
+            assertTrue(log, log.contains("reviewer assignment failed")); //$NON-NLS-1$
+            assertTrue(log, log.contains(marker));
+            assertTrue(log, log.contains("FORBIDDEN")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void skipsReviewerWithoutUsername() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRequestStatus created = server.client().createMergeRequest(
+                new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    .reviewer(new ProjectMember(7, null, null)));
+            assertEquals(3, created.iid());
+            // Назначение не выполнялось: последним остался запрос создания.
+            assertEquals(CREATE_PULL, server.lastPath());
         }
     }
 

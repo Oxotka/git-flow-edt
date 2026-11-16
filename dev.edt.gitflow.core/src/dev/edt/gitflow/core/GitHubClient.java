@@ -253,8 +253,20 @@ public final class GitHubClient implements MergeRequestProvider
             throw creationFailure(response);
         JsonObject created = JsonParser.parseString(response.body()).getAsJsonObject();
         int number = created.get("number").getAsInt(); //$NON-NLS-1$
-        if (request.reviewer() != null)
-            requestReviewer(number, request.reviewer());
+        ProjectMember reviewer = request.reviewer();
+        if (reviewer != null)
+        {
+            if (reviewer.username() == null || reviewer.username().isBlank())
+            {
+                // Логин неизвестен: назначить проверяющего нечем, но запрос уже
+                // создан и должен вернуться вызывающему.
+                HostingDiagnostics.write("reviewer assignment skipped: empty username"); //$NON-NLS-1$
+            }
+            else
+            {
+                requestReviewer(number, reviewer);
+            }
+        }
         return createdStatus(created);
     }
 
@@ -283,6 +295,9 @@ public final class GitHubClient implements MergeRequestProvider
         catch (HostingException e)
         {
             // Проверяющего можно назначить вручную: созданный запрос важнее.
+            // Причину пишем в диагностический журнал, иначе она теряется.
+            HostingDiagnostics.write("reviewer assignment failed: " + e.kind() //$NON-NLS-1$
+                + ": " + e.getMessage(), e); //$NON-NLS-1$
         }
     }
 

@@ -1,7 +1,7 @@
 package dev.edt.gitflow.core;
 
 /**
- * Участник проекта GitLab: нужен для выбора проверяющего.
+ * Участник проекта хостинга: нужен для выбора проверяющего.
  */
 public final class ProjectMember
 {

@@ -310,12 +310,14 @@ final class MergeRequestCreateDialog extends Dialog
                         case FORBIDDEN -> String.format(
                             Messages.get(client.writePermissionMessageKey()),
                             client.requestShortName());
-                        default -> Messages.get("mergeRequestUnavailable"); //$NON-NLS-1$
+                        default -> String.format(Messages.get("mergeRequestUnavailable"), //$NON-NLS-1$
+                            client.requestShortName());
                     };
                 }
                 catch (Exception e)
                 {
-                    error = Messages.get("mergeRequestUnavailable"); //$NON-NLS-1$
+                    error = String.format(Messages.get("mergeRequestUnavailable"), //$NON-NLS-1$
+                        client.requestShortName());
                 }
                 final MergeRequestStatus value = result;
                 final String message = error;

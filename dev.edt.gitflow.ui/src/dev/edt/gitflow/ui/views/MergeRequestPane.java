@@ -18,11 +18,14 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Link;
 
+import dev.edt.gitflow.core.GitLabRemote;
 import dev.edt.gitflow.core.HostingException;
+import dev.edt.gitflow.core.HostingProvider;
 import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
 import dev.edt.gitflow.ui.handlers.HostingConnection;
 import dev.edt.gitflow.ui.handlers.HostingSettings;
+import dev.edt.gitflow.ui.handlers.HostingSettingsDialog;
 import dev.edt.gitflow.ui.handlers.Messages;
 
 /**
@@ -44,6 +47,8 @@ final class MergeRequestPane
     private String defaultTargetBranch;
     private String webUrl;
     private String lastKey = ""; //$NON-NLS-1$
+    private String lastSuccessText;
+    private String lastSuccessUrl;
 
     MergeRequestPane(Composite parent)
     {
@@ -57,7 +62,9 @@ final class MergeRequestPane
         link.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         link.addListener(SWT.Selection, event ->
         {
-            if ("create".equals(event.text)) //$NON-NLS-1$
+            if ("settings".equals(event.text)) //$NON-NLS-1$
+                HostingSettingsDialog.open(composite.getShell(), repository);
+            else if ("create".equals(event.text)) //$NON-NLS-1$
                 openCreateDialog();
             else if (webUrl != null)
                 Program.launch(webUrl);
@@ -73,6 +80,10 @@ final class MergeRequestPane
         if (key.equals(lastKey))
             return;
         lastKey = key;
+        // Другая ветка или репозиторий: прежняя успешная строка к новой ветке
+        // не относится, в том числе как «последнее известное состояние».
+        lastSuccessText = null;
+        lastSuccessUrl = null;
         refresh(repository);
     }
 
@@ -89,14 +100,17 @@ final class MergeRequestPane
         this.repository = repository;
         final Repository currentRepository = repository;
         final Display display = link.getDisplay();
-        Job job = new Job(Messages.get("mergeRequestRefreshTitle")) //$NON-NLS-1$
+        final String previousText = lastSuccessText;
+        final String previousUrl = lastSuccessUrl;
+        Job job = new Job(String.format(Messages.get("mergeRequestRefreshTitle"), //$NON-NLS-1$
+            requestShortName(repository)))
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
             {
                 String text;
                 String url = null;
-                boolean present = false;
+                boolean success = false;
                 MergeRequestProvider created = null;
                 String sourceBranch = null;
                 String defaultTarget = null;
@@ -119,7 +133,6 @@ final class MergeRequestPane
                         Optional<MergeRequestStatus> status = created.statusForBranch(sourceBranch);
                         if (status.isPresent())
                         {
-                            present = true;
                             url = status.get().webUrl();
                             text = MergeRequestText.describeLink(status.get(), Messages::get,
                                 shortName);
@@ -135,19 +148,24 @@ final class MergeRequestPane
                             throw e;
                         text = MergeRequestText.createLink(Messages::get, shortName);
                     }
+                    success = true;
                 }
                 catch (HostingException e)
                 {
-                    text = Messages.get("mergeRequestUnavailable") + " [" + e.kind() + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    text = MergeRequestErrorText.describe(e, created, previousText, Messages::get);
+                    // При потере связи показываем последний успешный адрес: клик
+                    // по номеру остается осмысленным.
+                    if (e.kind() == HostingException.Kind.NETWORK)
+                        url = previousUrl;
                 }
                 catch (Exception e)
                 {
-                    text = Messages.get("mergeRequestUnavailable") + " [" //$NON-NLS-1$ //$NON-NLS-2$
-                        + e.getClass().getSimpleName() + "]"; //$NON-NLS-1$
+                    text = String.format(Messages.get("mergeRequestUnavailable"), //$NON-NLS-1$
+                        created == null ? "MR" : created.requestShortName()); //$NON-NLS-1$
                 }
                 final String result = text;
                 final String address = url;
-                final boolean exists = present;
+                final boolean loaded = success;
                 final MergeRequestProvider readyClient = created;
                 final String readyBranch = sourceBranch;
                 final String readyTarget = defaultTarget;
@@ -156,6 +174,11 @@ final class MergeRequestPane
                     refreshing = false;
                     if (composite.isDisposed())
                         return;
+                    if (loaded)
+                    {
+                        lastSuccessText = result;
+                        lastSuccessUrl = address;
+                    }
                     webUrl = address;
                     client = readyClient;
                     branch = readyBranch;
@@ -170,6 +193,25 @@ final class MergeRequestPane
         };
         job.setUser(false);
         job.schedule();
+    }
+
+    /**
+     * Сокращение запроса для заголовка задачи. Хост и тип хостинга известны по
+     * remote и настройкам без сетевого запроса.
+     */
+    private static String requestShortName(Repository repository)
+    {
+        try
+        {
+            String url = repository.getConfig().getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            String host = GitLabRemote.parse(url).host();
+            return HostingSettings.load().provider(host) == HostingProvider.GITHUB
+                ? "PR" : "MR"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (Exception e)
+        {
+            return "MR"; //$NON-NLS-1$
+        }
     }
 
     private void openCreateDialog()
