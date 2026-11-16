@@ -7,6 +7,7 @@ import org.junit.Test;
 
 import dev.edt.gitflow.core.CreateMergeRequest;
 import dev.edt.gitflow.core.MergeRequestStatus;
+import dev.edt.gitflow.core.ProjectMember;
 
 public class CreateMergeRequestTest
 {
@@ -33,6 +34,18 @@ public class CreateMergeRequestTest
             assertTrue(body, body.contains("\"target_branch\":\"master\"")); //$NON-NLS-1$ //$NON-NLS-2$
             assertTrue(body, body.contains("\"remove_source_branch\":true")); //$NON-NLS-1$ //$NON-NLS-2$
             assertTrue(body, body.contains("\"title\":\"Draft: Fix\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void sendsReviewerId() throws Exception
+    {
+        try (FakeGitLab server = new FakeGitLab())
+        {
+            server.respond(CREATE, 201, "{\"iid\":10,\"state\":\"opened\",\"title\":\"Fix\"}"); //$NON-NLS-1$
+            server.client().createMergeRequest(new CreateMergeRequest("fix/1", "master", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .reviewer(new ProjectMember(42, "Иван", "ivan"))); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(server.lastBody().contains("\"reviewer_ids\":[42]")); //$NON-NLS-1$
         }
     }
 

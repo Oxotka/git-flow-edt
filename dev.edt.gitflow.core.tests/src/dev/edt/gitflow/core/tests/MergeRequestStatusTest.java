@@ -34,6 +34,7 @@ public class MergeRequestStatusTest
             assertEquals("success", status.pipelineStatus()); //$NON-NLS-1$
             assertEquals("mergeable", status.mergeStatus()); //$NON-NLS-1$
             assertTrue(status.discussionsResolved());
+            assertTrue(status.approvalsRequiredKnown());
         }
     }
 
@@ -53,6 +54,7 @@ public class MergeRequestStatusTest
             assertTrue(status.hasConflicts());
             assertEquals(0, status.approvedCount());
             assertEquals(0, status.approvalsRequired());
+            assertFalse(status.approvalsRequiredKnown());
         }
     }
 

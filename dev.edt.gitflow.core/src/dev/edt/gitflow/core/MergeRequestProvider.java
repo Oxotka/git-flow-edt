@@ -18,6 +18,18 @@ public interface MergeRequestProvider
     /** Участники проекта для выбора проверяющего. */
     List<ProjectMember> projectMembers() throws HostingException;
 
+    /** Имя текущего пользователя хостинга. */
+    String currentUser() throws HostingException;
+
+    /** Ветка по умолчанию: цель нового запроса. */
+    String defaultBranch() throws HostingException;
+
+    /**
+     * Есть ли у токена право создавать запросы. Справочный признак: фактическое
+     * право проверяет ответ API.
+     */
+    boolean canCreateRequests() throws HostingException;
+
     /** Хост хостинга, он же ключ токена в настройках. */
     String host();
 
@@ -26,4 +38,13 @@ public interface MergeRequestProvider
 
     /** Название хостинга для интерфейса. */
     String providerName();
+
+    /** Сокращение запроса для строки состояния: MR или PR. */
+    String requestShortName();
+
+    /** Название запроса для интерфейса: merge request или pull request. */
+    String requestFullName();
+
+    /** Умеет ли хостинг удалять исходную ветку после слияния. */
+    boolean supportsDeleteSourceBranch();
 }

@@ -1,6 +1,7 @@
 package dev.edt.gitflow.core.tests;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -67,6 +68,50 @@ public class GitLabClientTest
             server.respond("/api/v4/personal_access_tokens/self", 200, //$NON-NLS-1$
                 "{\"scopes\":[\"api\",\"read_user\"]}"); //$NON-NLS-1$
             assertEquals(List.of("api", "read_user"), server.client().tokenScopes()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void readsDefaultBranch() throws Exception
+    {
+        try (FakeGitLab server = new FakeGitLab())
+        {
+            server.respond("/api/v4/projects/group%2Fproject", 200, //$NON-NLS-1$
+                "{\"default_branch\":\"master\"}"); //$NON-NLS-1$
+            assertEquals("master", server.client().defaultBranch()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void detectsReadOnlyToken() throws Exception
+    {
+        try (FakeGitLab server = new FakeGitLab())
+        {
+            server.respond("/api/v4/personal_access_tokens/self", 200, //$NON-NLS-1$
+                "{\"scopes\":[\"read_api\"]}"); //$NON-NLS-1$
+            assertFalse(server.client().canCreateRequests());
+        }
+    }
+
+    @Test
+    public void detectsWritableToken() throws Exception
+    {
+        try (FakeGitLab server = new FakeGitLab())
+        {
+            server.respond("/api/v4/personal_access_tokens/self", 200, //$NON-NLS-1$
+                "{\"scopes\":[\"api\",\"read_user\"]}"); //$NON-NLS-1$
+            assertTrue(server.client().canCreateRequests());
+        }
+    }
+
+    @Test
+    public void namesRequestInProviderTerms() throws Exception
+    {
+        try (FakeGitLab server = new FakeGitLab())
+        {
+            assertEquals("MR", server.client().requestShortName()); //$NON-NLS-1$
+            assertEquals("merge request", server.client().requestFullName()); //$NON-NLS-1$
+            assertTrue(server.client().supportsDeleteSourceBranch());
         }
     }
 

@@ -81,9 +81,40 @@ public final class GitLabClient implements MergeRequestProvider
         return "GitLab"; //$NON-NLS-1$
     }
 
+    @Override
+    public String requestShortName()
+    {
+        return "MR"; //$NON-NLS-1$
+    }
+
+    @Override
+    public String requestFullName()
+    {
+        return "merge request"; //$NON-NLS-1$
+    }
+
+    @Override
+    public boolean supportsDeleteSourceBranch()
+    {
+        return true;
+    }
+
+    @Override
     public String currentUser() throws HostingException
     {
         return getObject("user").get("name").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Override
+    public String defaultBranch() throws HostingException
+    {
+        return string(getObject("projects/" + encode(remote.projectPath())), "default_branch"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Override
+    public boolean canCreateRequests() throws HostingException
+    {
+        return tokenScopes().contains("api"); //$NON-NLS-1$
     }
 
     public List<String> tokenScopes() throws HostingException
@@ -132,6 +163,7 @@ public final class GitLabClient implements MergeRequestProvider
 
         int approved = 0;
         int required = 0;
+        boolean approvalsRequiredKnown = false;
         try
         {
             JsonObject approvals = getObject(base + "/" + iid + "/approvals"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -139,6 +171,7 @@ public final class GitLabClient implements MergeRequestProvider
                 approved = approvals.getAsJsonArray("approved_by").size(); //$NON-NLS-1$
             if (approvals.has("approvals_required")) //$NON-NLS-1$
                 required = approvals.get("approvals_required").getAsInt(); //$NON-NLS-1$
+            approvalsRequiredKnown = true;
         }
         catch (HostingException e)
         {
@@ -157,7 +190,8 @@ public final class GitLabClient implements MergeRequestProvider
             isDraft(chosen, title), string(chosen, "web_url"), approved, required, //$NON-NLS-1$
             pipelineStatus(chosen), conflicts, booleanValue(chosen, "blocking_discussions_resolved"), //$NON-NLS-1$
             chosen.has("user_notes_count") ? chosen.get("user_notes_count").getAsInt() : 0, //$NON-NLS-1$ //$NON-NLS-2$
-            mergeStatus, string(chosen, "merged_at"), mergeUserName(chosen))); //$NON-NLS-1$ //$NON-NLS-2$
+            mergeStatus, string(chosen, "merged_at"), mergeUserName(chosen), //$NON-NLS-1$ //$NON-NLS-2$
+            approvalsRequiredKnown));
     }
 
     private static String mergeUserName(JsonObject mergeRequest)
@@ -198,7 +232,7 @@ public final class GitLabClient implements MergeRequestProvider
             .timeout(timeout)
             .header("PRIVATE-TOKEN", token == null ? "" : token) //$NON-NLS-1$ //$NON-NLS-2$
             .header("Content-Type", "application/json") //$NON-NLS-1$ //$NON-NLS-2$
-            .POST(HttpRequest.BodyPublishers.ofString(mergeRequest.toJson().toString(),
+            .POST(HttpRequest.BodyPublishers.ofString(createPayload(mergeRequest).toString(),
                 StandardCharsets.UTF_8))
             .build();
         JsonObject created = JsonParser.parseString(send(create)).getAsJsonObject();
@@ -210,6 +244,25 @@ public final class GitLabClient implements MergeRequestProvider
             string(created, "state"), isDraft(created, title), string(created, "web_url"), //$NON-NLS-1$ //$NON-NLS-2$
             0, 0, pipelineStatus(created), booleanValue(created, "has_conflicts"), //$NON-NLS-1$
             booleanValue(created, "blocking_discussions_resolved"), 0, mergeStatus); //$NON-NLS-1$
+    }
+
+    private static JsonObject createPayload(CreateMergeRequest mergeRequest)
+    {
+        JsonObject json = new JsonObject();
+        json.addProperty("source_branch", mergeRequest.sourceBranch()); //$NON-NLS-1$
+        json.addProperty("target_branch", mergeRequest.targetBranch()); //$NON-NLS-1$
+        json.addProperty("title", mergeRequest.effectiveTitle()); //$NON-NLS-1$
+        if (mergeRequest.description() != null && !mergeRequest.description().isBlank())
+            json.addProperty("description", mergeRequest.description()); //$NON-NLS-1$
+        json.addProperty("remove_source_branch", mergeRequest.removeSourceBranch()); //$NON-NLS-1$
+        ProjectMember reviewer = mergeRequest.reviewer();
+        if (reviewer != null)
+        {
+            JsonArray reviewers = new JsonArray();
+            reviewers.add(reviewer.id());
+            json.add("reviewer_ids", reviewers); //$NON-NLS-1$
+        }
+        return json;
     }
 
     private static boolean isDraft(JsonObject mergeRequest, String title)

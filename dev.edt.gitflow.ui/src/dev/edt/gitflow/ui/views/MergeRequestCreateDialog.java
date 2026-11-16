@@ -268,7 +268,7 @@ final class MergeRequestCreateDialog extends Dialog
                 .removeSourceBranch(removeBranchButton.getSelection());
         ProjectMember reviewer = selectedReviewer();
         if (reviewer != null)
-            request.reviewer(reviewer.id());
+            request.reviewer(reviewer);
         resultLabel.setText(Messages.get("mergeRequestCreating")); //$NON-NLS-1$
         final var display = resultLabel.getDisplay();
         Job job = new Job(Messages.get("mergeRequestCreateTitle")) //$NON-NLS-1$

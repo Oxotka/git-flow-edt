@@ -1,10 +1,9 @@
 package dev.edt.gitflow.core;
 
-import com.google.gson.JsonObject;
-
 /**
  * Запрос на создание merge request. Черновик передается префиксом `Draft: ` в
- * заголовке: так его понимают все версии GitLab.
+ * заголовке: так его понимают все версии GitLab. Тело запроса собирает клиент
+ * хостинга: у GitLab и GitHub разные форматы.
  */
 public final class CreateMergeRequest
 {
@@ -14,7 +13,7 @@ public final class CreateMergeRequest
     private String description;
     private boolean draft;
     private boolean removeSourceBranch;
-    private int reviewerId;
+    private ProjectMember reviewer;
 
     public CreateMergeRequest(String sourceBranch, String targetBranch, String title)
     {
@@ -41,34 +40,53 @@ public final class CreateMergeRequest
         return this;
     }
 
-    public CreateMergeRequest reviewer(int memberId)
+    public CreateMergeRequest reviewer(ProjectMember value)
     {
-        this.reviewerId = memberId;
+        this.reviewer = value;
         return this;
     }
 
+    public String sourceBranch()
+    {
+        return sourceBranch;
+    }
+
+    public String targetBranch()
+    {
+        return targetBranch;
+    }
+
+    public String title()
+    {
+        return title;
+    }
+
+    public String description()
+    {
+        return description;
+    }
+
+    public boolean draft()
+    {
+        return draft;
+    }
+
+    public boolean removeSourceBranch()
+    {
+        return removeSourceBranch;
+    }
+
+    /** Проверяющий, если выбран. */
+    public ProjectMember reviewer()
+    {
+        return reviewer;
+    }
+
+    /** Заголовок с учетом черновика. */
     public String effectiveTitle()
     {
         if (!draft || title.startsWith("Draft:")) //$NON-NLS-1$
             return title;
         return "Draft: " + title; //$NON-NLS-1$
-    }
-
-    JsonObject toJson()
-    {
-        JsonObject json = new JsonObject();
-        json.addProperty("source_branch", sourceBranch); //$NON-NLS-1$
-        json.addProperty("target_branch", targetBranch); //$NON-NLS-1$
-        json.addProperty("title", effectiveTitle()); //$NON-NLS-1$
-        if (description != null && !description.isBlank())
-            json.addProperty("description", description); //$NON-NLS-1$
-        json.addProperty("remove_source_branch", removeSourceBranch); //$NON-NLS-1$
-        if (reviewerId > 0)
-        {
-            com.google.gson.JsonArray reviewers = new com.google.gson.JsonArray();
-            reviewers.add(reviewerId);
-            json.add("reviewer_ids", reviewers); //$NON-NLS-1$
-        }
-        return json;
     }
 }

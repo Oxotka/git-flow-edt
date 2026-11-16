@@ -6,6 +6,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import dev.edt.gitflow.core.CreateMergeRequest;
+import dev.edt.gitflow.core.ProjectMember;
 
 public class ProjectMembersTest
 {
@@ -34,7 +35,7 @@ public class ProjectMembersTest
             server.respond("/api/v4/projects/group%2Fproject/merge_requests", 201, //$NON-NLS-1$
                 "{\"iid\":12,\"state\":\"opened\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
             server.client().createMergeRequest(new CreateMergeRequest("fix/1", "master", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                .reviewer(5));
+                .reviewer(new ProjectMember(5, "Иван", "ivan"))); //$NON-NLS-1$ //$NON-NLS-2$
             assertTrue(server.lastBody(), server.lastBody().contains("\"reviewer_ids\":[5]")); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }

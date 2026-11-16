@@ -20,6 +20,7 @@ public final class MergeRequestStatus
     private final String mergeStatus;
     private final String mergedAt;
     private final String mergedBy;
+    private final boolean approvalsRequiredKnown;
 
     public MergeRequestStatus(int iid, String title, String state, boolean draft, String webUrl,
         int approvedCount, int approvalsRequired, String pipelineStatus, boolean hasConflicts,
@@ -34,8 +35,18 @@ public final class MergeRequestStatus
         boolean discussionsResolved, int notesCount, String mergeStatus, String mergedAt,
         String mergedBy)
     {
+        this(iid, title, state, draft, webUrl, approvedCount, approvalsRequired, pipelineStatus,
+            hasConflicts, discussionsResolved, notesCount, mergeStatus, mergedAt, mergedBy, true);
+    }
+
+    public MergeRequestStatus(int iid, String title, String state, boolean draft, String webUrl,
+        int approvedCount, int approvalsRequired, String pipelineStatus, boolean hasConflicts,
+        boolean discussionsResolved, int notesCount, String mergeStatus, String mergedAt,
+        String mergedBy, boolean approvalsRequiredKnown)
+    {
         this.mergedAt = mergedAt;
         this.mergedBy = mergedBy;
+        this.approvalsRequiredKnown = approvalsRequiredKnown;
         this.iid = iid;
         this.title = title;
         this.state = state;
@@ -83,6 +94,15 @@ public final class MergeRequestStatus
     public int approvalsRequired()
     {
         return approvalsRequired;
+    }
+
+    /**
+     * Известно ли правило одобрений. Ложь, когда сервер не отдал его: тогда
+     * нельзя утверждать, что одобрений не требуется.
+     */
+    public boolean approvalsRequiredKnown()
+    {
+        return approvalsRequiredKnown;
     }
 
     public String pipelineStatus()
