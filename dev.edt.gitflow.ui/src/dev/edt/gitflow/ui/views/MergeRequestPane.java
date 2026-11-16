@@ -127,10 +127,10 @@ final class MergeRequestPane
                     {
                         present = true;
                         url = status.get().webUrl();
-                        text = MergeRequestText.describeLink(status.get(), Messages::get);
+                        text = MergeRequestText.describeLink(status.get(), Messages::get, "MR"); //$NON-NLS-1$
                     }
                     else
-                        text = MergeRequestText.createLink(Messages::get);
+                        text = MergeRequestText.createLink(Messages::get, "MR"); //$NON-NLS-1$
                 }
                 catch (HostingException e)
                 {

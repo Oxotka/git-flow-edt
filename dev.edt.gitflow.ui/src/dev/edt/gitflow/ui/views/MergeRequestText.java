@@ -16,28 +16,33 @@ public final class MergeRequestText
     {
     }
 
-    public static String describe(MergeRequestStatus status, Function<String, String> messages)
+    /** Короткое имя провайдера: MR или PR. */
+    public static String describe(MergeRequestStatus status, Function<String, String> messages,
+        String shortName)
     {
-        return describe(status, messages, false);
+        return describe(status, messages, shortName, false);
     }
 
     /** Вариант для SWT Link: номер merge request — кликабельная ссылка. */
-    public static String describeLink(MergeRequestStatus status, Function<String, String> messages)
+    public static String describeLink(MergeRequestStatus status, Function<String, String> messages,
+        String shortName)
     {
-        return describe(status, messages, true);
+        return describe(status, messages, shortName, true);
     }
 
     /** Ссылка для создания merge request. */
-    public static String createLink(Function<String, String> messages)
+    public static String createLink(Function<String, String> messages, String shortName)
     {
-        return "<a href=\"create\">" + messages.apply("mergeRequestCreateLink") + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "<a href=\"create\">" //$NON-NLS-1$
+            + String.format(messages.apply("mergeRequestCreateLink"), shortName) + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String describe(MergeRequestStatus status, Function<String, String> messages,
-        boolean links)
+        String shortName, boolean links)
     {
         List<String> parts = new ArrayList<>();
-        parts.add(links ? "<a href=\"open\">MR-" + status.iid() + "</a>" : "MR-" + status.iid()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String number = shortName + "-" + status.iid(); //$NON-NLS-1$
+        parts.add(links ? "<a href=\"open\">" + number + "</a>" : number); //$NON-NLS-1$ //$NON-NLS-2$
         if ("merged".equals(status.state())) //$NON-NLS-1$
         {
             parts.add(messages.apply("mergeRequestMerged")); //$NON-NLS-1$
@@ -50,9 +55,14 @@ public final class MergeRequestText
         }
         if (status.draft())
             parts.add(messages.apply("mergeRequestDraft")); //$NON-NLS-1$
-        if (status.approvalsRequired() > 0)
+        if ("closed".equals(status.state())) //$NON-NLS-1$
+            parts.add(messages.apply("mergeRequestClosed")); //$NON-NLS-1$
+        if (status.approvalsRequiredKnown() && status.approvalsRequired() > 0)
             parts.add(String.format(messages.apply("mergeRequestApprovals"), //$NON-NLS-1$
                 status.approvedCount(), status.approvalsRequired()));
+        else if (status.approvedCount() > 0)
+            parts.add(String.format(messages.apply("mergeRequestApproved"), //$NON-NLS-1$
+                status.approvedCount()));
         String pipeline = pipelineText(status.pipelineStatus());
         if (pipeline != null)
             parts.add(messages.apply(pipeline));
