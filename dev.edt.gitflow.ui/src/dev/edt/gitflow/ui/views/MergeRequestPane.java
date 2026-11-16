@@ -18,9 +18,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Link;
 
-import dev.edt.gitflow.core.GitLabRemote;
 import dev.edt.gitflow.core.HostingException;
-import dev.edt.gitflow.core.HostingProvider;
 import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
 import dev.edt.gitflow.ui.handlers.HostingConnection;
@@ -100,10 +98,10 @@ final class MergeRequestPane
         this.repository = repository;
         final Repository currentRepository = repository;
         final Display display = link.getDisplay();
+        final String refreshKey = key(repository);
         final String previousText = lastSuccessText;
         final String previousUrl = lastSuccessUrl;
-        Job job = new Job(String.format(Messages.get("mergeRequestRefreshTitle"), //$NON-NLS-1$
-            requestShortName(repository)))
+        Job job = new Job(Messages.get("mergeRequestRefreshJob")) //$NON-NLS-1$
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
@@ -174,8 +172,10 @@ final class MergeRequestPane
                     refreshing = false;
                     if (composite.isDisposed())
                         return;
-                    if (loaded)
+                    if (loaded && refreshKey.equals(key(currentRepository)))
                     {
+                        // Задача могла завершиться уже после смены ветки: чужую
+                        // успешную строку в «последнее известное» не пишем.
                         lastSuccessText = result;
                         lastSuccessUrl = address;
                     }
@@ -193,25 +193,6 @@ final class MergeRequestPane
         };
         job.setUser(false);
         job.schedule();
-    }
-
-    /**
-     * Сокращение запроса для заголовка задачи. Хост и тип хостинга известны по
-     * remote и настройкам без сетевого запроса.
-     */
-    private static String requestShortName(Repository repository)
-    {
-        try
-        {
-            String url = repository.getConfig().getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            String host = GitLabRemote.parse(url).host();
-            return HostingSettings.load().provider(host) == HostingProvider.GITHUB
-                ? "PR" : "MR"; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        catch (Exception e)
-        {
-            return "MR"; //$NON-NLS-1$
-        }
     }
 
     private void openCreateDialog()

@@ -6,13 +6,17 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 import dev.edt.gitflow.core.CreateMergeRequest;
@@ -25,6 +29,7 @@ import dev.edt.gitflow.core.ProjectMember;
 
 public class GitHubClientTest
 {
+    private static final String DIAGNOSTICS_PROPERTY = "gitflow.diagnostics.file"; //$NON-NLS-1$
     private static final String USER = "/api/v3/user"; //$NON-NLS-1$
     private static final String REPO = "/api/v3/repos/owner/repo"; //$NON-NLS-1$
     private static final String COLLABORATORS = REPO + "/collaborators?per_page=100"; //$NON-NLS-1$
@@ -41,6 +46,35 @@ public class GitHubClientTest
         + "\"draft\":false,\"html_url\":\"https://github.com/owner/repo/pull/2\"," //$NON-NLS-1$
         + "\"head\":{\"sha\":\"abc\"},\"base\":{\"ref\":\"main\"}," //$NON-NLS-1$
         + "\"mergeable\":true,\"mergeable_state\":\"clean\"}"; //$NON-NLS-1$
+
+    private String previousDiagnosticsFile;
+    private Path diagnosticsFile;
+
+    @Before
+    public void redirectDiagnostics() throws IOException
+    {
+        // Диагностика пишется в отдельный файл: тест не зависит от домашнего
+        // каталога и не трогает журнал пользователя.
+        previousDiagnosticsFile = System.getProperty(DIAGNOSTICS_PROPERTY);
+        diagnosticsFile = Files.createTempFile("gitflow-diagnostics-", ".log"); //$NON-NLS-1$ //$NON-NLS-2$
+        System.setProperty(DIAGNOSTICS_PROPERTY, diagnosticsFile.toString());
+    }
+
+    @After
+    public void restoreDiagnostics() throws IOException
+    {
+        if (previousDiagnosticsFile == null)
+            System.clearProperty(DIAGNOSTICS_PROPERTY);
+        else
+            System.setProperty(DIAGNOSTICS_PROPERTY, previousDiagnosticsFile);
+        Files.deleteIfExists(diagnosticsFile);
+    }
+
+    @Test
+    public void diagnosticsFileHonoursSystemProperty()
+    {
+        assertEquals(diagnosticsFile, HostingDiagnostics.file());
+    }
 
     @Test
     public void readsLoginAndSendsBearer() throws Exception

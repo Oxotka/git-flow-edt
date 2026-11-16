@@ -115,9 +115,12 @@ public final class HostingSettingsDialog extends Dialog
         serverField = new Text(grid, SWT.BORDER);
         serverField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         String host = repositoryHost();
-        String saved = host == null ? settings.baseUrl() : settings.baseUrl(host);
+        // Для своего хоста берем только его сохраненный адрес: общий адрес
+        // другого сервера здесь показывать нельзя, иначе проверка подключения
+        // и сохранение уйдут не на тот хост.
+        String saved = host == null ? settings.baseUrl() : settings.storedBaseUrl(host);
         String knownServer = repositoryServer();
-        String address = saved == null || saved.isBlank() ? knownServer : saved;
+        String address = saved == null ? knownServer : saved;
         serverField.setText(address == null ? "" : address); //$NON-NLS-1$
 
         new Label(grid, SWT.NONE).setText(Messages.get("hostingProvider")); //$NON-NLS-1$

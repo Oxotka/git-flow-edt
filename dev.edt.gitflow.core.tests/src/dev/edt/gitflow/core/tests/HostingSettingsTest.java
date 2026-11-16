@@ -2,6 +2,7 @@ package dev.edt.gitflow.core.tests;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
@@ -101,6 +102,31 @@ public class HostingSettingsTest
         {
             restore(node, providerKey, previousProvider);
             restore(node, baseKey, previousBase);
+        }
+    }
+
+    @Test
+    public void storedBaseUrlDoesNotFallBackToGlobal()
+    {
+        // Форма настроек не должна показывать адрес другого хоста: у хоста без
+        // своего ключа сохраненного адреса нет, даже если общий адрес задан.
+        Preferences node = preferences("hosting"); //$NON-NLS-1$
+        String key = "baseUrl.scm.local"; //$NON-NLS-1$
+        String previous = node.get(key, null);
+        node.remove(key);
+        try
+        {
+            var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
+                "akeso.dept07", HostingProvider.GITLAB); //$NON-NLS-1$
+            assertNull(settings.storedBaseUrl("scm.local")); //$NON-NLS-1$
+            assertEquals("https://akeso.dept07", settings.baseUrl("scm.local")); //$NON-NLS-1$ //$NON-NLS-2$
+            node.put(key, "https://scm.local"); //$NON-NLS-1$
+            assertEquals("https://scm.local", settings.storedBaseUrl("scm.local")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals("https://scm.local", settings.storedBaseUrl("SCM.LOCAL")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        finally
+        {
+            restore(node, key, previous);
         }
     }
 

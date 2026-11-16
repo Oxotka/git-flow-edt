@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 public final class HostingDiagnostics
 {
     private static final String FILE_NAME = "gitflow-hosting.log"; //$NON-NLS-1$
+    private static final String FILE_PROPERTY = "gitflow.diagnostics.file"; //$NON-NLS-1$
 
     private HostingDiagnostics()
     {
@@ -24,6 +25,9 @@ public final class HostingDiagnostics
 
     public static Path file()
     {
+        String override = System.getProperty(FILE_PROPERTY);
+        if (override != null && !override.isBlank())
+            return Path.of(override);
         return Path.of(System.getProperty("user.home"), FILE_NAME); //$NON-NLS-1$
     }
 
@@ -48,7 +52,7 @@ public final class HostingDiagnostics
             Files.writeString(file(), text.toString(), StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
-        catch (IOException e)
+        catch (IOException | RuntimeException e)
         {
             // Журнал диагностический: если писать некуда, создание запроса не падает.
         }

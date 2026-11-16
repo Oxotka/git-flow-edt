@@ -190,8 +190,20 @@ public final class HostingSettings
     {
         if (host == null || host.isBlank())
             return baseUrl;
-        String stored = hostingNode().get(HOST_BASE_URL_PREFIX + normalize(host), null);
+        String stored = storedBaseUrl(host);
         return stored == null ? baseUrl : stored;
+    }
+
+    /**
+     * Сохраненный адрес именно этого хоста. Возвращает {@code null}, если
+     * {@code baseUrl.<host>} нет: общий адрес другого сервера сюда не
+     * подставляется, иначе форма настроек показала бы чужой хост.
+     */
+    public String storedBaseUrl(String host)
+    {
+        if (host == null || host.isBlank())
+            return null;
+        return hostingNode().get(HOST_BASE_URL_PREFIX + normalize(host), null);
     }
 
     public String serverHost()
