@@ -1,6 +1,5 @@
 package dev.edt.gitflow.ui.views;
 
-import java.time.Duration;
 import java.util.Optional;
 
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -19,13 +18,11 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Link;
 
-import dev.edt.gitflow.core.GitLabClient;
-import dev.edt.gitflow.core.GitLabRemote;
 import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
+import dev.edt.gitflow.ui.handlers.HostingConnection;
 import dev.edt.gitflow.ui.handlers.HostingSettings;
-import dev.edt.gitflow.ui.handlers.HostingSsl;
 import dev.edt.gitflow.ui.handlers.Messages;
 
 /**
@@ -44,6 +41,7 @@ final class MergeRequestPane
     private Repository repository;
     private MergeRequestProvider client;
     private String branch;
+    private String defaultTargetBranch;
     private String webUrl;
     private String lastKey = ""; //$NON-NLS-1$
 
@@ -101,36 +99,42 @@ final class MergeRequestPane
                 boolean present = false;
                 MergeRequestProvider created = null;
                 String sourceBranch = null;
+                String defaultTarget = null;
                 try
                 {
-                    String remote = currentRepository.getConfig()
-                        .getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    GitLabRemote gitLab = remote == null ? null : parse(remote);
                     HostingSettings settings = HostingSettings.load();
-                    String token = gitLab == null ? "" : settings.token(gitLab.host()); //$NON-NLS-1$
                     sourceBranch = branchName(currentRepository);
-                    if (gitLab == null || !settings.matches(gitLab.host()) || token.isBlank()
-                        || sourceBranch == null || isIntegrationBranch(sourceBranch)
+                    if (sourceBranch == null || isIntegrationBranch(sourceBranch)
                         || !matchesPrefix(sourceBranch, settings))
+                        return hideInBackground(display);
+                    created = HostingConnection.create(currentRepository);
+                    if (created == null)
+                        return hideInBackground(display);
+                    defaultTarget = defaultBranch(created);
+                    if (sourceBranch.equals(defaultTarget))
+                        return hideInBackground(display);
+                    String shortName = created.requestShortName();
+                    try
                     {
-                        display.asyncExec(() ->
+                        Optional<MergeRequestStatus> status = created.statusForBranch(sourceBranch);
+                        if (status.isPresent())
                         {
-                            refreshing = false;
-                            hide();
-                        });
-                        return Status.OK_STATUS;
+                            present = true;
+                            url = status.get().webUrl();
+                            text = MergeRequestText.describeLink(status.get(), Messages::get,
+                                shortName);
+                        }
+                        else
+                            text = MergeRequestText.createLink(Messages::get, shortName);
                     }
-                    created = new GitLabClient(gitLab, token, HostingSsl.context(settings),
-                        Duration.ofSeconds(10));
-                    Optional<MergeRequestStatus> status = created.statusForBranch(sourceBranch);
-                    if (status.isPresent())
+                    catch (HostingException e)
                     {
-                        present = true;
-                        url = status.get().webUrl();
-                        text = MergeRequestText.describeLink(status.get(), Messages::get, "MR"); //$NON-NLS-1$
+                        // 404 проекта или запроса — это отсутствие запроса, а не сбой
+                        // связи: строка показывает ссылку создания.
+                        if (e.kind() != HostingException.Kind.NOT_FOUND)
+                            throw e;
+                        text = MergeRequestText.createLink(Messages::get, shortName);
                     }
-                    else
-                        text = MergeRequestText.createLink(Messages::get, "MR"); //$NON-NLS-1$
                 }
                 catch (HostingException e)
                 {
@@ -146,6 +150,7 @@ final class MergeRequestPane
                 final boolean exists = present;
                 final MergeRequestProvider readyClient = created;
                 final String readyBranch = sourceBranch;
+                final String readyTarget = defaultTarget;
                 display.asyncExec(() ->
                 {
                     refreshing = false;
@@ -154,6 +159,7 @@ final class MergeRequestPane
                     webUrl = address;
                     client = readyClient;
                     branch = readyBranch;
+                    defaultTargetBranch = readyTarget;
                     link.setText(result);
                     composite.setVisible(true);
                     excludeRow(false);
@@ -171,9 +177,21 @@ final class MergeRequestPane
         if (repository == null || client == null || branch == null)
             return;
         MergeRequestStatus created = MergeRequestCreateDialog.open(composite.getShell(), client,
-            branch, lastCommitSubject(repository), targetBranches(repository));
+            branch, lastCommitSubject(repository),
+            targetBranches(repository, defaultTargetBranch));
         if (created != null)
             refresh(repository);
+    }
+
+    /** Скрывает строку и завершает фоновую задачу. */
+    private IStatus hideInBackground(Display display)
+    {
+        display.asyncExec(() ->
+        {
+            refreshing = false;
+            hide();
+        });
+        return Status.OK_STATUS;
     }
 
     void hide()
@@ -223,14 +241,17 @@ final class MergeRequestPane
         }
     }
 
-    private static GitLabRemote parse(String remote)
+    /** Ветка по умолчанию у провайдера; {@code null}, если запрос не удался. */
+    private static String defaultBranch(MergeRequestProvider client)
     {
         try
         {
-            return GitLabRemote.parse(remote);
+            String branch = client.defaultBranch();
+            return branch == null || branch.isBlank() ? null : branch;
         }
-        catch (IllegalArgumentException e)
+        catch (HostingException | RuntimeException e)
         {
+            // Без ответа провайдера строка строится по локальным веткам.
             return null;
         }
     }
@@ -262,24 +283,29 @@ final class MergeRequestPane
         return false;
     }
 
-    /** Целевые ветки: master и ветки origin, без служебного HEAD. */
-    private static java.util.List<String> targetBranches(Repository repository)
+    /**
+     * Целевые ветки: ветка по умолчанию у провайдера, затем ветки origin без
+     * служебного HEAD и без интеграционных веток.
+     */
+    private static java.util.List<String> targetBranches(Repository repository,
+        String defaultBranch)
     {
         java.util.LinkedHashSet<String> result = new java.util.LinkedHashSet<>();
-        result.add("master"); //$NON-NLS-1$
+        // Без ответа провайдера целью остается прежняя ветка master.
+        result.add(defaultBranch == null || defaultBranch.isBlank() ? "master" : defaultBranch); //$NON-NLS-1$
         try
         {
             String prefix = "refs/remotes/origin/"; //$NON-NLS-1$
             for (var ref : repository.getRefDatabase().getRefsByPrefix(prefix))
             {
                 String name = ref.getName().substring(prefix.length());
-                if (!"HEAD".equals(name)) //$NON-NLS-1$
+                if (!"HEAD".equals(name) && !isIntegrationBranch(name)) //$NON-NLS-1$
                     result.add(name);
             }
         }
         catch (Exception e)
         {
-            // Без удаленных веток останется только master.
+            // Без удаленных веток останется только ветка по умолчанию.
         }
         return new java.util.ArrayList<>(result);
     }
