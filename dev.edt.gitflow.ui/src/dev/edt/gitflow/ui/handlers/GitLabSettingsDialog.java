@@ -26,8 +26,8 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
 import dev.edt.gitflow.core.GitLabClient;
-import dev.edt.gitflow.core.GitLabException;
 import dev.edt.gitflow.core.GitLabRemote;
+import dev.edt.gitflow.core.HostingException;
 
 /**
  * Форма подключения к GitLab. Адрес сервера подставляется из репозитория, но
@@ -301,9 +301,9 @@ public final class GitLabSettingsDialog extends Dialog
                             client.projectMembers();
                             status.append(". ").append(Messages.get("gitLabMembersAvailable")); //$NON-NLS-1$ //$NON-NLS-2$
                         }
-                        catch (GitLabException e)
+                        catch (HostingException e)
                         {
-                            if (e.kind() == GitLabException.Kind.FORBIDDEN)
+                            if (e.kind() == HostingException.Kind.FORBIDDEN)
                                 status.append(". ").append(Messages.get("gitLabHintMemberRead")); //$NON-NLS-1$ //$NON-NLS-2$
                         }
                         text = status.toString();
@@ -313,7 +313,7 @@ public final class GitLabSettingsDialog extends Dialog
                         text = Messages.get("gitLabConnectedLimited"); //$NON-NLS-1$
                     }
                 }
-                catch (GitLabException e)
+                catch (HostingException e)
                 {
                     GitLabLog.write("gitlab error: " + e.kind(), e); //$NON-NLS-1$
                     text = textFor(e);
@@ -338,7 +338,7 @@ public final class GitLabSettingsDialog extends Dialog
         job.schedule();
     }
 
-    private static String textFor(GitLabException error)
+    private static String textFor(HostingException error)
     {
         return switch (error.kind())
         {

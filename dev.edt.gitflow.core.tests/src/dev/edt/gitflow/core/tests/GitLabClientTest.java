@@ -8,7 +8,7 @@ import java.util.List;
 
 import org.junit.Test;
 
-import dev.edt.gitflow.core.GitLabException;
+import dev.edt.gitflow.core.HostingException;
 
 public class GitLabClientTest
 {
@@ -34,9 +34,9 @@ public class GitLabClientTest
                 server.client().currentUser();
                 fail("ожидалось исключение"); //$NON-NLS-1$
             }
-            catch (GitLabException e)
+            catch (HostingException e)
             {
-                assertEquals(GitLabException.Kind.UNAUTHORIZED, e.kind());
+                assertEquals(HostingException.Kind.UNAUTHORIZED, e.kind());
             }
         }
     }
@@ -52,9 +52,9 @@ public class GitLabClientTest
                 server.client().currentUser();
                 fail("ожидалось исключение"); //$NON-NLS-1$
             }
-            catch (GitLabException e)
+            catch (HostingException e)
             {
-                assertEquals(GitLabException.Kind.FORBIDDEN, e.kind());
+                assertEquals(HostingException.Kind.FORBIDDEN, e.kind());
             }
         }
     }
@@ -81,9 +81,9 @@ public class GitLabClientTest
             client.currentUser();
             fail("ожидалось исключение"); //$NON-NLS-1$
         }
-        catch (GitLabException e)
+        catch (HostingException e)
         {
-            assertEquals(GitLabException.Kind.NETWORK, e.kind());
+            assertEquals(HostingException.Kind.NETWORK, e.kind());
             assertTrue(e.getMessage() != null);
         }
     }

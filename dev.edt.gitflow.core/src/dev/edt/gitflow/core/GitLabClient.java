@@ -81,12 +81,12 @@ public final class GitLabClient implements MergeRequestProvider
         return "GitLab"; //$NON-NLS-1$
     }
 
-    public String currentUser() throws GitLabException
+    public String currentUser() throws HostingException
     {
         return getObject("user").get("name").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    public List<String> tokenScopes() throws GitLabException
+    public List<String> tokenScopes() throws HostingException
     {
         JsonArray scopes = getObject("personal_access_tokens/self").getAsJsonArray("scopes"); //$NON-NLS-1$ //$NON-NLS-2$
         List<String> result = new ArrayList<>();
@@ -99,7 +99,7 @@ public final class GitLabClient implements MergeRequestProvider
      * Состояние merge request указанной ветки. Если по ветке несколько запросов,
      * выбирается открытый, иначе первый по времени обновления.
      */
-    public Optional<MergeRequestStatus> statusForBranch(String branch) throws GitLabException
+    public Optional<MergeRequestStatus> statusForBranch(String branch) throws HostingException
     {
         String base = "projects/" + encode(remote.projectPath()) + "/merge_requests"; //$NON-NLS-1$ //$NON-NLS-2$
         JsonArray list = JsonParser.parseString(send(request(base + "?source_branch=" //$NON-NLS-1$
@@ -125,7 +125,7 @@ public final class GitLabClient implements MergeRequestProvider
             // в карточке merge request.
             chosen = getObject(base + "/" + iid); //$NON-NLS-1$
         }
-        catch (GitLabException e)
+        catch (HostingException e)
         {
             // Для строки состояния хватит и полей из списка.
         }
@@ -140,10 +140,10 @@ public final class GitLabClient implements MergeRequestProvider
             if (approvals.has("approvals_required")) //$NON-NLS-1$
                 required = approvals.get("approvals_required").getAsInt(); //$NON-NLS-1$
         }
-        catch (GitLabException e)
+        catch (HostingException e)
         {
             // Младшая редакция GitLab не отдает правила апрувов: счетчик не нужен.
-            if (e.kind() != GitLabException.Kind.FORBIDDEN && e.kind() != GitLabException.Kind.NOT_FOUND)
+            if (e.kind() != HostingException.Kind.FORBIDDEN && e.kind() != HostingException.Kind.NOT_FOUND)
                 throw e;
         }
 
@@ -174,7 +174,7 @@ public final class GitLabClient implements MergeRequestProvider
      * Участники проекта для выбора проверяющего. Нужен scope или право
      * Member: Read; без него GitLab отвечает 403.
      */
-    public List<ProjectMember> projectMembers() throws GitLabException
+    public List<ProjectMember> projectMembers() throws HostingException
     {
         String path = "projects/" + encode(remote.projectPath()) + "/members/all?per_page=100"; //$NON-NLS-1$ //$NON-NLS-2$
         JsonArray members = JsonParser.parseString(send(request(path))).getAsJsonArray();
@@ -191,7 +191,7 @@ public final class GitLabClient implements MergeRequestProvider
     /**
      * Создает merge request и возвращает его состояние без запроса апрувов.
      */
-    public MergeRequestStatus createMergeRequest(CreateMergeRequest mergeRequest) throws GitLabException
+    public MergeRequestStatus createMergeRequest(CreateMergeRequest mergeRequest) throws HostingException
     {
         HttpRequest create = HttpRequest.newBuilder(java.net.URI.create(remote.apiBase()
             + "/projects/" + encode(remote.projectPath()) + "/merge_requests")) //$NON-NLS-1$ //$NON-NLS-2$
@@ -241,7 +241,7 @@ public final class GitLabClient implements MergeRequestProvider
         return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    private JsonObject getObject(String path) throws GitLabException
+    private JsonObject getObject(String path) throws HostingException
     {
         return JsonParser.parseString(send(request(path))).getAsJsonObject();
     }
@@ -255,7 +255,7 @@ public final class GitLabClient implements MergeRequestProvider
             .build();
     }
 
-    private String send(HttpRequest request) throws GitLabException
+    private String send(HttpRequest request) throws HostingException
     {
         HttpResponse<String> response;
         try
@@ -264,39 +264,39 @@ public final class GitLabClient implements MergeRequestProvider
         }
         catch (SSLException e)
         {
-            throw new GitLabException(GitLabException.Kind.TLS,
+            throw new HostingException(HostingException.Kind.TLS,
                 "Сертификат сервера не доверен", e); //$NON-NLS-1$
         }
         catch (HttpTimeoutException e)
         {
-            throw new GitLabException(GitLabException.Kind.NETWORK, "Сервер не отвечает", e); //$NON-NLS-1$
+            throw new HostingException(HostingException.Kind.NETWORK, "Сервер не отвечает", e); //$NON-NLS-1$
         }
         catch (IOException e)
         {
-            throw new GitLabException(GitLabException.Kind.NETWORK,
+            throw new HostingException(HostingException.Kind.NETWORK,
                 e.getMessage() == null ? "Сервер не отвечает" : e.getMessage(), e); //$NON-NLS-1$
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            throw new GitLabException(GitLabException.Kind.NETWORK, "Запрос прерван", e); //$NON-NLS-1$
+            throw new HostingException(HostingException.Kind.NETWORK, "Запрос прерван", e); //$NON-NLS-1$
         }
         if (response.statusCode() >= 200 && response.statusCode() < 300)
             return response.body();
         throw failure(response.statusCode(), response.body());
     }
 
-    private static GitLabException failure(int status, String body)
+    private static HostingException failure(int status, String body)
     {
-        GitLabException.Kind kind = switch (status)
+        HostingException.Kind kind = switch (status)
         {
-            case 400 -> GitLabException.Kind.BAD_REQUEST;
-            case 401 -> GitLabException.Kind.UNAUTHORIZED;
-            case 403 -> GitLabException.Kind.FORBIDDEN;
-            case 404 -> GitLabException.Kind.NOT_FOUND;
-            case 409 -> GitLabException.Kind.CONFLICT;
-            default -> GitLabException.Kind.SERVER;
+            case 400 -> HostingException.Kind.BAD_REQUEST;
+            case 401 -> HostingException.Kind.UNAUTHORIZED;
+            case 403 -> HostingException.Kind.FORBIDDEN;
+            case 404 -> HostingException.Kind.NOT_FOUND;
+            case 409 -> HostingException.Kind.CONFLICT;
+            default -> HostingException.Kind.SERVER;
         };
-        return new GitLabException(kind, "GitLab ответил " + status + ": " + body); //$NON-NLS-1$ //$NON-NLS-2$
+        return new HostingException(kind, "GitLab ответил " + status + ": " + body); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

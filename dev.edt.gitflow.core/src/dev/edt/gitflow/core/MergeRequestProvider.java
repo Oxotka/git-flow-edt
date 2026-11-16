@@ -10,13 +10,13 @@ import java.util.Optional;
 public interface MergeRequestProvider
 {
     /** Состояние запроса по ветке, если он уже создан. */
-    Optional<MergeRequestStatus> statusForBranch(String branch) throws GitLabException;
+    Optional<MergeRequestStatus> statusForBranch(String branch) throws HostingException;
 
     /** Создает запрос на слияние. */
-    MergeRequestStatus createMergeRequest(CreateMergeRequest request) throws GitLabException;
+    MergeRequestStatus createMergeRequest(CreateMergeRequest request) throws HostingException;
 
     /** Участники проекта для выбора проверяющего. */
-    List<ProjectMember> projectMembers() throws GitLabException;
+    List<ProjectMember> projectMembers() throws HostingException;
 
     /** Хост хостинга, он же ключ токена в настройках. */
     String host();

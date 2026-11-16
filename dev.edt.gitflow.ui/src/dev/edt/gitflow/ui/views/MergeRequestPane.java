@@ -20,8 +20,8 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Link;
 
 import dev.edt.gitflow.core.GitLabClient;
-import dev.edt.gitflow.core.GitLabException;
 import dev.edt.gitflow.core.GitLabRemote;
+import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
 import dev.edt.gitflow.ui.handlers.GitLabSettings;
@@ -132,7 +132,7 @@ final class MergeRequestPane
                     else
                         text = MergeRequestText.createLink(Messages::get);
                 }
-                catch (GitLabException e)
+                catch (HostingException e)
                 {
                     text = Messages.get("mergeRequestUnavailable") + " [" + e.kind() + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 }

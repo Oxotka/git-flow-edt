@@ -23,7 +23,7 @@ import org.eclipse.swt.widgets.Text;
 
 import dev.edt.gitflow.core.CreateMergeRequest;
 import dev.edt.gitflow.core.GitLabClient;
-import dev.edt.gitflow.core.GitLabException;
+import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
 import dev.edt.gitflow.core.ProjectMember;
@@ -282,7 +282,7 @@ final class MergeRequestCreateDialog extends Dialog
                 {
                     result = client.createMergeRequest(request);
                 }
-                catch (GitLabException e)
+                catch (HostingException e)
                 {
                     error = switch (e.kind())
                     {
