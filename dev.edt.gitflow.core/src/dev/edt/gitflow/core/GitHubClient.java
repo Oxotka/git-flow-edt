@@ -230,12 +230,71 @@ public final class GitHubClient implements MergeRequestProvider
     }
 
     /**
-     * Создание pull request. Пока не реализовано.
+     * Создание pull request. Проверяющий назначается отдельным запросом после
+     * создания: ошибка этого запроса не отменяет уже созданный pull request.
      */
     @Override
     public MergeRequestStatus createMergeRequest(CreateMergeRequest request) throws HostingException
     {
-        throw new UnsupportedOperationException();
+        HttpResponse<String> response = exchange(post(repoPath() + "/pulls", createPayload(request))); //$NON-NLS-1$
+        if (!isSuccess(response.statusCode()))
+            throw creationFailure(response);
+        JsonObject created = JsonParser.parseString(response.body()).getAsJsonObject();
+        int number = created.get("number").getAsInt(); //$NON-NLS-1$
+        if (request.reviewer() != null)
+            requestReviewer(number, request.reviewer());
+        return createdStatus(created);
+    }
+
+    private JsonObject createPayload(CreateMergeRequest request)
+    {
+        JsonObject json = new JsonObject();
+        json.addProperty("title", request.title()); //$NON-NLS-1$
+        json.addProperty("head", remote.owner() + ":" + request.sourceBranch()); //$NON-NLS-1$ //$NON-NLS-2$
+        json.addProperty("base", request.targetBranch()); //$NON-NLS-1$
+        if (request.description() != null && !request.description().isBlank())
+            json.addProperty("body", request.description()); //$NON-NLS-1$
+        json.addProperty("draft", request.draft()); //$NON-NLS-1$
+        return json;
+    }
+
+    private void requestReviewer(int number, ProjectMember reviewer)
+    {
+        JsonObject payload = new JsonObject();
+        JsonArray reviewers = new JsonArray();
+        reviewers.add(reviewer.username());
+        payload.add("reviewers", reviewers); //$NON-NLS-1$
+        try
+        {
+            send(post(repoPath() + "/pulls/" + number + "/requested_reviewers", payload)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (HostingException e)
+        {
+            // Проверяющего можно назначить вручную: созданный запрос важнее.
+        }
+    }
+
+    private static MergeRequestStatus createdStatus(JsonObject pull)
+    {
+        return new MergeRequestStatus(pull.get("number").getAsInt(), string(pull, "title"), //$NON-NLS-1$ //$NON-NLS-2$
+            state(pull), booleanValue(pull, "draft"), string(pull, "html_url"), //$NON-NLS-1$ //$NON-NLS-2$
+            0, 0, null, hasConflicts(pull), true, 0, mergeStatus(pull), //$NON-NLS-1$
+            string(pull, "merged_at"), mergedBy(pull), true); //$NON-NLS-1$
+    }
+
+    private static HostingException creationFailure(HttpResponse<String> response)
+    {
+        String body = response.body();
+        if (response.statusCode() == 422)
+        {
+            boolean exists = body != null
+                && body.toLowerCase(Locale.ROOT).contains("already exists"); //$NON-NLS-1$
+            return new HostingException(exists ? HostingException.Kind.CONFLICT
+                : HostingException.Kind.BAD_REQUEST,
+                exists ? "PR уже создан" : "Ветка не отправлена"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return failure(response.statusCode(), body,
+            response.headers().firstValue("X-RateLimit-Remaining").orElse(null)); //$NON-NLS-1$
     }
 
     /**
@@ -418,23 +477,33 @@ public final class GitHubClient implements MergeRequestProvider
         return JsonParser.parseString(send(request(path))).getAsJsonObject();
     }
 
-    private HttpRequest request(String path)
+    private HttpRequest.Builder builder(String path)
     {
         return HttpRequest.newBuilder(URI.create(remote.apiBase() + "/" + path)) //$NON-NLS-1$
             .timeout(timeout)
             .header("Authorization", "Bearer " + (token == null ? "" : token)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .header("Accept", ACCEPT) //$NON-NLS-1$
-            .header("X-GitHub-Api-Version", API_VERSION) //$NON-NLS-1$
-            .GET()
+            .header("X-GitHub-Api-Version", API_VERSION); //$NON-NLS-1$
+    }
+
+    private HttpRequest request(String path)
+    {
+        return builder(path).GET().build();
+    }
+
+    private HttpRequest post(String path, JsonObject payload)
+    {
+        return builder(path)
+            .header("Content-Type", "application/json") //$NON-NLS-1$ //$NON-NLS-2$
+            .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
             .build();
     }
 
-    private String send(HttpRequest request) throws HostingException
+    private HttpResponse<String> exchange(HttpRequest request) throws HostingException
     {
-        HttpResponse<String> response;
         try
         {
-            response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            return http.send(request, HttpResponse.BodyHandlers.ofString());
         }
         catch (SSLException e)
         {
@@ -455,10 +524,20 @@ public final class GitHubClient implements MergeRequestProvider
             Thread.currentThread().interrupt();
             throw new HostingException(HostingException.Kind.NETWORK, "Запрос прерван", e); //$NON-NLS-1$
         }
-        if (response.statusCode() >= 200 && response.statusCode() < 300)
+    }
+
+    private String send(HttpRequest request) throws HostingException
+    {
+        HttpResponse<String> response = exchange(request);
+        if (isSuccess(response.statusCode()))
             return response.body();
         throw failure(response.statusCode(), response.body(),
             response.headers().firstValue("X-RateLimit-Remaining").orElse(null)); //$NON-NLS-1$
+    }
+
+    private static boolean isSuccess(int status)
+    {
+        return status >= 200 && status < 300;
     }
 
     private static HostingException failure(int status, String body, String rateLimitRemaining)

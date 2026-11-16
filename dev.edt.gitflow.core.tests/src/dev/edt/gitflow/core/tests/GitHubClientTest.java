@@ -13,6 +13,7 @@ import java.util.List;
 
 import org.junit.Test;
 
+import dev.edt.gitflow.core.CreateMergeRequest;
 import dev.edt.gitflow.core.GitHubClient;
 import dev.edt.gitflow.core.GitHubRemote;
 import dev.edt.gitflow.core.HostingException;
@@ -27,6 +28,8 @@ public class GitHubClientTest
     private static final String PULLS = REPO + "/pulls" //$NON-NLS-1$
         + "?head=owner:fix/1&state=all&sort=updated&direction=desc&per_page=10"; //$NON-NLS-1$
     private static final String PULL = REPO + "/pulls/"; //$NON-NLS-1$
+    private static final String CREATE_PULL = REPO + "/pulls"; //$NON-NLS-1$
+    private static final String REQUESTED_REVIEWERS = PULL + "3/requested_reviewers"; //$NON-NLS-1$
     private static final String PROTECTION = REPO + "/branches/main/protection/" //$NON-NLS-1$
         + "required_pull_request_reviews"; //$NON-NLS-1$
     private static final String CHECKS = REPO + "/commits/abc/check-runs?per_page=100"; //$NON-NLS-1$
@@ -484,6 +487,121 @@ public class GitHubClientTest
         }
     }
 
+    @Test
+    public void createsDraftWithHeadAndBase() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"draft\":true," //$NON-NLS-1$
+                + "\"html_url\":\"https://github.com/owner/repo/pull/3\",\"title\":\"Fix\"}"); //$NON-NLS-1$
+            MergeRequestStatus created = server.client().createMergeRequest(
+                new CreateMergeRequest("fix/1", "main", "Fix").draft(true)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertEquals(3, created.iid());
+            assertEquals("opened", created.state()); //$NON-NLS-1$
+            assertEquals("Fix", created.title()); //$NON-NLS-1$
+            assertTrue(created.draft());
+            assertEquals("https://github.com/owner/repo/pull/3", created.webUrl()); //$NON-NLS-1$
+            assertTrue(created.approvalsRequiredKnown());
+            assertEquals("POST", server.lastMethod()); //$NON-NLS-1$
+            assertEquals("Bearer test-token", server.lastAuthorization()); //$NON-NLS-1$
+            String body = server.lastBody();
+            assertTrue(body, body.contains("\"head\":\"owner:fix/1\"")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(body, body.contains("\"base\":\"main\"")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(body, body.contains("\"title\":\"Fix\"")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(body, body.contains("\"draft\":true")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse(body, body.contains("\"body\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void sendsDescriptionAsBody() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            server.client().createMergeRequest(new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .description("Подробности")); //$NON-NLS-1$
+            assertTrue(server.lastBody(), server.lastBody().contains("\"body\":\"Подробности\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void omitsBlankDescription() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            server.client().createMergeRequest(new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .description("   ")); //$NON-NLS-1$
+            assertFalse(server.lastBody(), server.lastBody().contains("\"body\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void assignsReviewerAfterCreate() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            server.respond(REQUESTED_REVIEWERS, 201, "{\"number\":3,\"state\":\"open\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRequestStatus created = server.client().createMergeRequest(
+                new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    .reviewer(new ProjectMember(7, null, "ivan"))); //$NON-NLS-1$
+            assertEquals(3, created.iid());
+            assertEquals("POST", server.lastMethod()); //$NON-NLS-1$
+            assertEquals(REQUESTED_REVIEWERS, server.lastPath());
+            assertTrue(server.lastBody(), server.lastBody().contains("\"reviewers\":[\"ivan\"]")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void keepsCreatedPullRequestWhenReviewerFails() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 201, "{\"number\":3,\"state\":\"open\",\"title\":\"Fix\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            server.respond(REQUESTED_REVIEWERS, 422, //$NON-NLS-1$
+                "{\"message\":\"Reviews may only be requested from collaborators.\"}"); //$NON-NLS-1$
+            MergeRequestStatus created = server.client().createMergeRequest(
+                new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    .reviewer(new ProjectMember(7, null, "ivan"))); //$NON-NLS-1$
+            assertEquals(3, created.iid());
+            assertEquals(REQUESTED_REVIEWERS, server.lastPath());
+        }
+    }
+
+    @Test
+    public void mapsExistingPullRequestToConflict() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 422, //$NON-NLS-1$
+                "{\"errors\":[{\"message\":\"A pull request already exists for owner:fix/1.\"}]}"); //$NON-NLS-1$
+            assertCreateFailure(server, HostingException.Kind.CONFLICT);
+        }
+    }
+
+    @Test
+    public void mapsMissingCommitsToBadRequest() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 422, //$NON-NLS-1$
+                "{\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"No commits between main and fix/1\"}]}"); //$NON-NLS-1$
+            assertCreateFailure(server, HostingException.Kind.BAD_REQUEST);
+        }
+    }
+
+    @Test
+    public void keepsOtherCreateFailures() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(CREATE_PULL, 500, "{\"message\":\"Server Error\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertCreateFailure(server, HostingException.Kind.SERVER);
+        }
+    }
+
     private static void respondPullRequest(FakeGitHub server, int number, String pull)
     {
         server.respond(PULLS, 200, "[" + pull + "]"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -530,6 +648,19 @@ public class GitHubClientTest
         try
         {
             server.client().currentUser();
+            fail("ожидалось исключение"); //$NON-NLS-1$
+        }
+        catch (HostingException e)
+        {
+            assertEquals(kind, e.kind());
+        }
+    }
+
+    private static void assertCreateFailure(FakeGitHub server, HostingException.Kind kind) throws Exception
+    {
+        try
+        {
+            server.client().createMergeRequest(new CreateMergeRequest("fix/1", "main", "Fix")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             fail("ожидалось исключение"); //$NON-NLS-1$
         }
         catch (HostingException e)

@@ -43,6 +43,8 @@ final class FakeGitHub implements AutoCloseable
     private String lastAuthorization;
     private String lastAccept;
     private String lastApiVersion;
+    private String lastMethod;
+    private String lastPath;
 
     FakeGitHub() throws IOException
     {
@@ -90,6 +92,16 @@ final class FakeGitHub implements AutoCloseable
         return lastApiVersion;
     }
 
+    String lastMethod()
+    {
+        return lastMethod;
+    }
+
+    String lastPath()
+    {
+        return lastPath;
+    }
+
     private Response lookup(String rawPath, String rawQuery)
     {
         String singleEncodedPath = rawPath.replace("%25", "%"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -130,6 +142,8 @@ final class FakeGitHub implements AutoCloseable
         lastAuthorization = exchange.getRequestHeaders().getFirst("Authorization"); //$NON-NLS-1$
         lastAccept = exchange.getRequestHeaders().getFirst("Accept"); //$NON-NLS-1$
         lastApiVersion = exchange.getRequestHeaders().getFirst("X-GitHub-Api-Version"); //$NON-NLS-1$
+        lastMethod = exchange.getRequestMethod();
+        lastPath = rawPath + query(rawQuery);
         Response response = lookup(rawPath, rawQuery);
         if (response == null)
             response = new Response(404, "{\"message\":\"Not Found\"}"); //$NON-NLS-1$
