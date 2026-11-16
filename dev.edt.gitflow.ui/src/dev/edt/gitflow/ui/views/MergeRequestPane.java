@@ -284,8 +284,9 @@ final class MergeRequestPane
     }
 
     /**
-     * Целевые ветки: ветка по умолчанию у провайдера, затем ветки origin без
-     * служебного HEAD и без интеграционных веток.
+     * Целевые ветки: ветка по умолчанию у провайдера, затем все ветки origin без
+     * служебного HEAD. Интеграционные ветки не исключаются: скрытие строки на
+     * текущей ветке — отдельное правило и на список целей не влияет.
      */
     private static java.util.List<String> targetBranches(Repository repository,
         String defaultBranch)
@@ -299,7 +300,7 @@ final class MergeRequestPane
             for (var ref : repository.getRefDatabase().getRefsByPrefix(prefix))
             {
                 String name = ref.getName().substring(prefix.length());
-                if (!"HEAD".equals(name) && !isIntegrationBranch(name)) //$NON-NLS-1$
+                if (!"HEAD".equals(name)) //$NON-NLS-1$
                     result.add(name);
             }
         }

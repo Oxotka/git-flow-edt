@@ -63,6 +63,9 @@ public final class HostingConnection
         catch (Exception e)
         {
             // Нет настроек, нет сертификата или адрес не разобран — строки нет.
+            // Сбой конфигурации уходит в журнал: без записи его не видно совсем.
+            HostingLog.write("hosting connection: " + e.getClass().getSimpleName() //$NON-NLS-1$
+                + ": " + e.getMessage(), e); //$NON-NLS-1$
             return null;
         }
     }
@@ -109,6 +112,7 @@ public final class HostingConnection
         }
         catch (IllegalArgumentException e)
         {
+            HostingLog.write("hosting: remote.origin.url not recognised: " + remoteUrl, e); //$NON-NLS-1$
             return null;
         }
     }
