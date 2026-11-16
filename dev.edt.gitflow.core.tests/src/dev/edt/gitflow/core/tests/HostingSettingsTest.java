@@ -75,6 +75,36 @@ public class HostingSettingsTest
     }
 
     @Test
+    public void matchesHostWithOwnStoredConfiguration()
+    {
+        // У хоста может быть только тип или только адрес: обоих достаточно,
+        // чтобы считать хост настроенным, хотя общий serverHost другой.
+        Preferences node = preferences("hosting"); //$NON-NLS-1$
+        String providerKey = "provider.scm.local"; //$NON-NLS-1$
+        String baseKey = "baseUrl.docs.local"; //$NON-NLS-1$
+        String previousProvider = node.get(providerKey, null);
+        String previousBase = node.get(baseKey, null);
+        node.put(providerKey, HostingProvider.GITHUB.name());
+        node.put(baseKey, "https://docs.local"); //$NON-NLS-1$
+        try
+        {
+            var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
+                "akeso.dept07", HostingProvider.GITLAB); //$NON-NLS-1$
+            assertTrue(settings.matches("scm.local")); //$NON-NLS-1$
+            assertTrue(settings.matches("SCM.LOCAL")); //$NON-NLS-1$
+            assertTrue(settings.matches("docs.local")); //$NON-NLS-1$
+            assertEquals("https://akeso.dept07", settings.baseUrl("scm.local")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals("https://docs.local", settings.baseUrl("docs.local")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse(settings.matches("empty.local")); //$NON-NLS-1$
+        }
+        finally
+        {
+            restore(node, providerKey, previousProvider);
+            restore(node, baseKey, previousBase);
+        }
+    }
+
+    @Test
     public void readsLegacyBranchPrefixesWhenNewKeyAbsent()
     {
         Preferences hosting = preferences("hosting"); //$NON-NLS-1$

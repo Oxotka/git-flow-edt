@@ -106,13 +106,17 @@ public final class HostingConnection
      */
     private static String host(String remoteUrl)
     {
+        if (remoteUrl == null || remoteUrl.isBlank())
+            return null;
         try
         {
             return GitLabRemote.parse(remoteUrl).host();
         }
         catch (IllegalArgumentException e)
         {
-            HostingLog.write("hosting: remote.origin.url not recognised: " + remoteUrl, e); //$NON-NLS-1$
+            // Адрес не разобран: строки нет. В журнал уходит только сообщение,
+            // без стектрейса: при каждом обновлении он не нужен.
+            HostingLog.write("hosting: remote.origin.url not recognised: " + remoteUrl); //$NON-NLS-1$
             return null;
         }
     }

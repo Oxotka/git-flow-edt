@@ -181,6 +181,19 @@ public final class HostingSettings
         return baseUrl;
     }
 
+    /**
+     * Адрес сервера для хоста: сохраненный {@code baseUrl.<host>}, а при его
+     * отсутствии — текущий общий адрес. У каждого хоста может быть свой адрес
+     * по умолчанию, поэтому форма настроек берет его отсюда.
+     */
+    public String baseUrl(String host)
+    {
+        if (host == null || host.isBlank())
+            return baseUrl;
+        String stored = hostingNode().get(HOST_BASE_URL_PREFIX + normalize(host), null);
+        return stored == null ? baseUrl : stored;
+    }
+
     public String serverHost()
     {
         return serverHost;
@@ -197,15 +210,24 @@ public final class HostingSettings
     }
 
     /**
-     * Токен можно отправлять только на свой сервер: иначе он уйдет на GitHub или
-     * другой хостинг, который встретится в рабочей области.
+     * Настроен ли хост: у него есть свой адрес или тип хостинга, сохраненный
+     * токен либо он совпадает с прежним общим сервером. Токен можно отправлять
+     * только на настроенный хост: иначе он уйдет на GitHub или другой хостинг,
+     * который встретится в рабочей области.
      */
     public boolean matches(String host)
     {
-        if (host == null || serverHost == null)
+        if (host == null || host.isBlank())
             return false;
+        String key = normalize(host);
         String expected = normalize(serverHost);
-        return !expected.isEmpty() && expected.equals(normalize(host));
+        if (!expected.isEmpty() && expected.equals(key))
+            return true;
+        Preferences node = hostingNode();
+        if (node.get(HOST_BASE_URL_PREFIX + key, null) != null
+            || node.get(PROVIDER_PREFIX + key, null) != null)
+            return true;
+        return !token(key).isBlank();
     }
 
     /**

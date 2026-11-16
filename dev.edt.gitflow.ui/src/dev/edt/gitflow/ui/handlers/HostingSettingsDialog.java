@@ -114,8 +114,11 @@ public final class HostingSettingsDialog extends Dialog
         new Label(grid, SWT.NONE).setText(Messages.get("gitLabAddress")); //$NON-NLS-1$
         serverField = new Text(grid, SWT.BORDER);
         serverField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        String host = repositoryHost();
+        String saved = host == null ? settings.baseUrl() : settings.baseUrl(host);
         String knownServer = repositoryServer();
-        serverField.setText(knownServer == null ? settings.baseUrl() : knownServer);
+        String address = saved == null || saved.isBlank() ? knownServer : saved;
+        serverField.setText(address == null ? "" : address); //$NON-NLS-1$
 
         new Label(grid, SWT.NONE).setText(Messages.get("hostingProvider")); //$NON-NLS-1$
         providerCombo = new Combo(grid, SWT.READ_ONLY);
