@@ -5,14 +5,18 @@ import java.net.Proxy;
 import java.net.ProxySelector;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 import javax.net.ssl.SSLContext;
@@ -167,12 +171,62 @@ public final class GitHubClient implements MergeRequestProvider
     }
 
     /**
-     * Состояние pull request ветки. Пока не реализовано.
+     * Состояние pull request ветки. Из нескольких запросов выбирается открытый,
+     * иначе первый по времени обновления. Проверки, одобрения и готовность
+     * к слиянию приводятся к значениям, которые показывает строка панели.
      */
     @Override
     public Optional<MergeRequestStatus> statusForBranch(String branch) throws HostingException
     {
-        throw new UnsupportedOperationException();
+        JsonArray list = JsonParser.parseString(send(request(repoPath() + "/pulls?head=" //$NON-NLS-1$
+            + encode(remote.owner() + ":" + branch) //$NON-NLS-1$
+            + "&state=all&sort=updated&direction=desc&per_page=10"))).getAsJsonArray(); //$NON-NLS-1$
+        JsonElement chosen = null;
+        for (JsonElement element : list)
+        {
+            if (chosen == null)
+                chosen = element;
+            if ("open".equals(string(element.getAsJsonObject(), "state"))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                chosen = element;
+                break;
+            }
+        }
+        if (chosen == null)
+            return Optional.empty();
+        int number = chosen.getAsJsonObject().get("number").getAsInt(); //$NON-NLS-1$
+        // В списке нет mergeable, проверок и сведений о слиянии: они приходят
+        // только в деталях pull request.
+        JsonObject pull = getObject(repoPath() + "/pulls/" + number); //$NON-NLS-1$
+        JsonArray reviews = JsonParser.parseString(send(request(
+            repoPath() + "/pulls/" + number + "/reviews?per_page=100"))).getAsJsonArray(); //$NON-NLS-1$ //$NON-NLS-2$
+        int required = 0;
+        boolean approvalsRequiredKnown = false;
+        String base = baseRef(pull);
+        if (base != null)
+        {
+            try
+            {
+                JsonObject rule = getObject(repoPath() + "/branches/" + encode(base) //$NON-NLS-1$
+                    + "/protection/required_pull_request_reviews"); //$NON-NLS-1$
+                if (rule.has("required_approving_review_count")) //$NON-NLS-1$
+                    required = rule.get("required_approving_review_count").getAsInt(); //$NON-NLS-1$
+                approvalsRequiredKnown = true;
+            }
+            catch (HostingException e)
+            {
+                // Правило видят только администраторы репозитория: без него
+                // показывается число одобрений без «из скольких».
+                if (e.kind() != HostingException.Kind.FORBIDDEN
+                    && e.kind() != HostingException.Kind.NOT_FOUND)
+                    throw e;
+            }
+        }
+        return Optional.of(new MergeRequestStatus(number, string(pull, "title"), //$NON-NLS-1$
+            state(pull), booleanValue(pull, "draft"), string(pull, "html_url"), //$NON-NLS-1$ //$NON-NLS-2$
+            approvedCount(reviews), required, pipelineStatus(headSha(pull)), //$NON-NLS-1$
+            hasConflicts(pull), true, 0, mergeStatus(pull), string(pull, "merged_at"), //$NON-NLS-1$ //$NON-NLS-2$
+            mergedBy(pull), approvalsRequiredKnown));
     }
 
     /**
@@ -182,6 +236,176 @@ public final class GitHubClient implements MergeRequestProvider
     public MergeRequestStatus createMergeRequest(CreateMergeRequest request) throws HostingException
     {
         throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Состояние в терминах строки: слитый запрос важнее закрытого, открытый
+     * приводится к «opened».
+     */
+    private static String state(JsonObject pull)
+    {
+        if (string(pull, "merged_at") != null) //$NON-NLS-1$
+            return "merged"; //$NON-NLS-1$
+        String state = string(pull, "state"); //$NON-NLS-1$
+        if ("open".equals(state)) //$NON-NLS-1$
+            return "opened"; //$NON-NLS-1$
+        return state;
+    }
+
+    private static String headSha(JsonObject pull)
+    {
+        return nested(pull, "head", "sha"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String baseRef(JsonObject pull)
+    {
+        return nested(pull, "base", "ref"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String mergedBy(JsonObject pull)
+    {
+        return nested(pull, "merged_by", "login"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String nested(JsonObject object, String field, String name)
+    {
+        if (!object.has(field) || !object.get(field).isJsonObject())
+            return null;
+        return string(object.getAsJsonObject(field), name);
+    }
+
+    /**
+     * Конфликты видны только когда GitHub уже посчитал слияние. Пустой
+     * mergeable означает «еще считается»: ни конфликтов, ни готовности.
+     */
+    private static boolean hasConflicts(JsonObject pull)
+    {
+        Boolean mergeable = optionalBoolean(pull, "mergeable"); //$NON-NLS-1$
+        if (mergeable == null)
+            return false;
+        return !mergeable.booleanValue() || "dirty".equals(string(pull, "mergeable_state")); //$NON-NLS-1$
+    }
+
+    private static String mergeStatus(JsonObject pull)
+    {
+        Boolean mergeable = optionalBoolean(pull, "mergeable"); //$NON-NLS-1$
+        if (mergeable == null || !mergeable.booleanValue())
+            return null;
+        return "clean".equals(string(pull, "mergeable_state")) ? "mergeable" : null; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static Boolean optionalBoolean(JsonObject object, String name)
+    {
+        if (!object.has(name) || object.get(name).isJsonNull())
+            return null;
+        return object.get(name).getAsBoolean();
+    }
+
+    /**
+     * Число одобрений: решающим считается последнее ревью каждого пользователя.
+     * COMMENTED и PENDING одобрение не меняют, CHANGES_REQUESTED и DISMISSED
+     * снимают; ревью приходят в хронологическом порядке.
+     */
+    private static int approvedCount(JsonArray reviews)
+    {
+        Map<String, Boolean> latest = new LinkedHashMap<>();
+        for (JsonElement element : reviews)
+        {
+            JsonObject review = element.getAsJsonObject();
+            String login = nested(review, "user", "login"); //$NON-NLS-1$ //$NON-NLS-2$
+            String status = string(review, "state"); //$NON-NLS-1$
+            if (login == null || status == null)
+                continue;
+            switch (status)
+            {
+                case "APPROVED" -> latest.put(login, Boolean.TRUE); //$NON-NLS-1$
+                case "CHANGES_REQUESTED", "DISMISSED" -> latest.put(login, Boolean.FALSE); //$NON-NLS-1$ //$NON-NLS-2$
+                default -> { } // COMMENTED и PENDING ничего не меняют.
+            }
+        }
+        int approved = 0;
+        for (Boolean value : latest.values())
+            if (value.booleanValue())
+                approved++;
+        return approved;
+    }
+
+    /**
+     * Итог проверок коммита: check-runs, а при их отсутствии — combined status.
+     * Недоступные проверки не скрывают строку, а оставляют статус пустым.
+     */
+    private String pipelineStatus(String sha) throws HostingException
+    {
+        if (sha == null)
+            return null;
+        JsonObject runs;
+        try
+        {
+            runs = getObject(repoPath() + "/commits/" + encode(sha) + "/check-runs?per_page=100"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (HostingException e)
+        {
+            if (e.kind() == HostingException.Kind.FORBIDDEN
+                || e.kind() == HostingException.Kind.NOT_FOUND)
+                return null;
+            throw e;
+        }
+        if (runs.has("total_count") && runs.get("total_count").getAsInt() > 0) //$NON-NLS-1$ //$NON-NLS-2$
+            return checkRunsStatus(runs.has("check_runs") //$NON-NLS-1$
+                ? runs.getAsJsonArray("check_runs") : new JsonArray()); //$NON-NLS-1$
+        try
+        {
+            return combinedStatus(string(getObject(
+                repoPath() + "/commits/" + encode(sha) + "/status"), "state")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        catch (HostingException e)
+        {
+            if (e.kind() == HostingException.Kind.FORBIDDEN
+                || e.kind() == HostingException.Kind.NOT_FOUND)
+                return null;
+            throw e;
+        }
+    }
+
+    private static String checkRunsStatus(JsonArray runs)
+    {
+        boolean running = false;
+        for (JsonElement element : runs)
+        {
+            JsonObject run = element.getAsJsonObject();
+            if (!"completed".equals(string(run, "status"))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                running = true;
+                continue;
+            }
+            if (isFailedConclusion(string(run, "conclusion"))) //$NON-NLS-1$
+                return "failed"; //$NON-NLS-1$
+        }
+        return running ? "running" : "success"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static boolean isFailedConclusion(String conclusion)
+    {
+        if (conclusion == null)
+            return false;
+        return switch (conclusion)
+        {
+            case "failure", "timed_out", "cancelled", "action_required", "startup_failure" -> true; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            default -> false;
+        };
+    }
+
+    private static String combinedStatus(String state)
+    {
+        if (state == null)
+            return null;
+        return switch (state)
+        {
+            case "failure", "error" -> "failed"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            case "pending" -> "running"; //$NON-NLS-1$ //$NON-NLS-2$
+            case "success" -> "success"; //$NON-NLS-1$ //$NON-NLS-2$
+            default -> null;
+        };
     }
 
     private String repoPath()
@@ -258,6 +482,11 @@ public final class GitHubClient implements MergeRequestProvider
     private static String trim(String value)
     {
         return value == null ? null : value.trim();
+    }
+
+    private static String encode(String value)
+    {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static String string(JsonObject object, String name)
