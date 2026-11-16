@@ -31,8 +31,9 @@ import dev.edt.gitflow.ui.handlers.Messages;
 import dev.edt.gitflow.ui.handlers.ReviewerCache;
 
 /**
- * Диалог создания merge request для текущей ветки. Заголовок заполнен первой
- * строкой последнего коммита, целевая ветка — master.
+ * Диалог создания запроса на слияние для текущей ветки: merge request в GitLab
+ * или pull request в GitHub. Заголовок заполнен первой строкой последнего
+ * коммита, целевая ветка — ветка по умолчанию хостинга.
  */
 final class MergeRequestCreateDialog extends Dialog
 {
@@ -66,7 +67,7 @@ final class MergeRequestCreateDialog extends Dialog
     protected void configureShell(Shell newShell)
     {
         super.configureShell(newShell);
-        newShell.setText(Messages.get("mergeRequestCreateTitle")); //$NON-NLS-1$
+        newShell.setText(dialogTitle());
     }
 
     @Override
@@ -95,7 +96,8 @@ final class MergeRequestCreateDialog extends Dialog
         descriptionField.setLayoutData(descriptionData);
 
         reviewerLabel = new Label(grid, SWT.NONE);
-        reviewerLabel.setText(Messages.get("mergeRequestReviewer")); //$NON-NLS-1$
+        reviewerLabel.setText(Messages.get(client.requiresReviewer()
+            ? "mergeRequestReviewer" : "mergeRequestReviewerOptional")); //$NON-NLS-1$ //$NON-NLS-2$
         reviewerCombo = new Combo(grid, SWT.DROP_DOWN);
         reviewerCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         reviewerCombo.addListener(SWT.Modify, event -> filterReviewers());
@@ -115,10 +117,14 @@ final class MergeRequestCreateDialog extends Dialog
         draftButton = new Button(grid, SWT.CHECK);
         draftButton.setText(Messages.get("mergeRequestDraft")); //$NON-NLS-1$
         draftButton.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-        removeBranchButton = new Button(grid, SWT.CHECK);
-        removeBranchButton.setText(Messages.get("mergeRequestRemoveBranch")); //$NON-NLS-1$
-        removeBranchButton.setSelection(true);
-        removeBranchButton.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        // GitHub не удаляет ветку по pull request: это настройка репозитория.
+        if (client.supportsDeleteSourceBranch())
+        {
+            removeBranchButton = new Button(grid, SWT.CHECK);
+            removeBranchButton.setText(Messages.get("mergeRequestRemoveBranch")); //$NON-NLS-1$
+            removeBranchButton.setSelection(true);
+            removeBranchButton.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        }
 
         resultLabel = new Label(grid, SWT.WRAP);
         resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
@@ -176,7 +182,9 @@ final class MergeRequestCreateDialog extends Dialog
     {
         if (reviewerCombo.isDisposed())
             return;
-        boolean visible = !reviewerOptions.isEmpty();
+        // У GitHub проверяющего можно ввести логином, даже если список
+        // участников недоступен: поле остается на виду.
+        boolean visible = !reviewerOptions.isEmpty() || !client.requiresReviewer();
         reviewerLabel.setVisible(visible);
         reviewerCombo.setVisible(visible);
         if (!visible)
@@ -186,7 +194,10 @@ final class MergeRequestCreateDialog extends Dialog
             .toArray(String[]::new));
         if (!previous.isEmpty())
             reviewerCombo.setText(previous);
-        else if (reviewerCombo.getItemCount() > 0)
+        else if (client.requiresReviewer() && reviewerCombo.getItemCount() > 0)
+            // GitLab без проверяющего не создает merge request, поэтому первая
+            // подсказка выбирается сразу. В GitHub проверяющий необязателен:
+            // подставлять первого участника без выбора пользователя нельзя.
             reviewerCombo.select(0);
         reviewerCombo.getParent().layout();
     }
@@ -238,7 +249,11 @@ final class MergeRequestCreateDialog extends Dialog
                 || typed.equalsIgnoreCase(member.username()))
                 return member;
         }
-        return null;
+        if (client.requiresReviewer())
+            return null;
+        // GitHub принимает логин: список collaborators может быть пустым или
+        // недоступным, а назначение проверяющего выполняет клиент.
+        return new ProjectMember(0, null, typed);
     }
 
     MergeRequestStatus created()
@@ -255,8 +270,8 @@ final class MergeRequestCreateDialog extends Dialog
             resultLabel.setText(Messages.get("mergeRequestTitleRequired")); //$NON-NLS-1$
             return;
         }
-        if (!reviewerOptions.isEmpty() && !reviewerCombo.getText().isBlank()
-            && selectedReviewer() == null)
+        if (client.requiresReviewer() && !reviewerOptions.isEmpty()
+            && !reviewerCombo.getText().isBlank() && selectedReviewer() == null)
         {
             resultLabel.setText(Messages.get("mergeRequestReviewerRequired")); //$NON-NLS-1$
             return;
@@ -265,13 +280,15 @@ final class MergeRequestCreateDialog extends Dialog
             targetField.getText().trim(), title)
                 .description(descriptionField.getText())
                 .draft(draftButton.getSelection())
-                .removeSourceBranch(removeBranchButton.getSelection());
+                .removeSourceBranch(removeBranchButton != null
+                    && removeBranchButton.getSelection());
         ProjectMember reviewer = selectedReviewer();
         if (reviewer != null)
             request.reviewer(reviewer);
-        resultLabel.setText(Messages.get("mergeRequestCreating")); //$NON-NLS-1$
+        resultLabel.setText(String.format(Messages.get("mergeRequestCreating"), //$NON-NLS-1$
+            client.requestFullName()));
         final var display = resultLabel.getDisplay();
-        Job job = new Job(Messages.get("mergeRequestCreateTitle")) //$NON-NLS-1$
+        Job job = new Job(dialogTitle())
         {
             @Override
             protected IStatus run(IProgressMonitor monitor)
@@ -310,7 +327,9 @@ final class MergeRequestCreateDialog extends Dialog
                     }
                     created = value;
                     ProjectMember chosen = selectedReviewer();
-                    if (chosen != null)
+                    // Логин, введенный вручную, не несет id участника: в кеш
+                    // попадают только выбранные из списка участники проекта.
+                    if (chosen != null && chosen.id() > 0)
                         ReviewerCache.remember(client.projectPath(), chosen);
                     okPressedDone();
                 });
@@ -329,8 +348,16 @@ final class MergeRequestCreateDialog extends Dialog
     @Override
     protected void createButtonsForButtonBar(Composite parent)
     {
-        createButton(parent, IDialogConstants.OK_ID, Messages.get("mergeRequestCreate"), true); //$NON-NLS-1$
+        createButton(parent, IDialogConstants.OK_ID, String.format(
+            Messages.get("mergeRequestCreate"), client.requestShortName()), true); //$NON-NLS-1$
         createButton(parent, IDialogConstants.CANCEL_ID, IDialogConstants.CANCEL_LABEL, false);
+    }
+
+    /** Заголовок окна: «Новый merge request» или «Новый pull request». */
+    private String dialogTitle()
+    {
+        return String.format(Messages.get("mergeRequestCreateTitle"), //$NON-NLS-1$
+            client.requestFullName());
     }
 
     static MergeRequestStatus open(Shell shell, MergeRequestProvider client, String sourceBranch,

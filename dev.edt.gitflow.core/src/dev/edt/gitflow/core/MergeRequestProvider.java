@@ -47,4 +47,11 @@ public interface MergeRequestProvider
 
     /** Умеет ли хостинг удалять исходную ветку после слияния. */
     boolean supportsDeleteSourceBranch();
+
+    /**
+     * Обязателен ли проверяющий при создании запроса. GitLab ждет
+     * reviewer_ids, в GitHub проверяющего назначают после создания и он
+     * необязателен.
+     */
+    boolean requiresReviewer();
 }

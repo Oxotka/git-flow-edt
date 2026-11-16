@@ -100,6 +100,12 @@ public final class GitLabClient implements MergeRequestProvider
     }
 
     @Override
+    public boolean requiresReviewer()
+    {
+        return true;
+    }
+
+    @Override
     public String currentUser() throws HostingException
     {
         return getObject("user").get("name").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$

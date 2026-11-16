@@ -131,6 +131,12 @@ public final class GitHubClient implements MergeRequestProvider
     }
 
     @Override
+    public boolean requiresReviewer()
+    {
+        return false;
+    }
+
+    @Override
     public String currentUser() throws HostingException
     {
         return string(getObject("user"), "login"); //$NON-NLS-1$ //$NON-NLS-2$
