@@ -20,7 +20,7 @@ public class WorkingChangesTest
     public void resetConflictToHeadPreservesOtherMergeResults() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-reset-merge-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("conflict.txt"), "base\n"); //$NON-NLS-1$ //$NON-NLS-2$
             Files.writeString(work.resolve("other.txt"), "base\n"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -66,7 +66,7 @@ public class WorkingChangesTest
     public void cancelledPreparationLeavesIndexUntouched() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-cancel-stage-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("new.txt"), "new"); //$NON-NLS-1$ //$NON-NLS-2$
             var selection = WorkingChanges.read(git.getRepository()).unstaged();
@@ -83,7 +83,7 @@ public class WorkingChangesTest
     public void stagesCachedSelectionWithoutIncludingLaterChanges() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-cached-stage-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("modified.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             Files.writeString(work.resolve("deleted.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -115,7 +115,7 @@ public class WorkingChangesTest
     public void stageAndUnstageKeepOtherChangesSeparate() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-changes-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("tracked.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("tracked.txt").call(); //$NON-NLS-1$
@@ -137,7 +137,7 @@ public class WorkingChangesTest
     public void stagesDeletedTrackedFile() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-delete-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("tracked.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("tracked.txt").call(); //$NON-NLS-1$
@@ -153,7 +153,7 @@ public class WorkingChangesTest
     public void resetRestoresHeadAndClearsStagedChanges() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-discard-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Path file = work.resolve("tracked.txt"); //$NON-NLS-1$
             Files.writeString(file, "base"); //$NON-NLS-1$
@@ -175,7 +175,7 @@ public class WorkingChangesTest
     public void resetDoesNotDeleteUntrackedFile() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-discard-new-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Path file = work.resolve("new.txt"); //$NON-NLS-1$
             Files.writeString(file, "keep"); //$NON-NLS-1$
@@ -194,7 +194,7 @@ public class WorkingChangesTest
     public void deletesOnlyUntrackedFile() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-delete-untracked-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Path tracked = work.resolve("tracked.txt"); //$NON-NLS-1$
             Path untracked = work.resolve("new.txt"); //$NON-NLS-1$
@@ -220,7 +220,7 @@ public class WorkingChangesTest
     public void stagesAndUnstagesAllChangesInOneOperation() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-stage-all-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("modified.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             Files.writeString(work.resolve("deleted.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -244,7 +244,7 @@ public class WorkingChangesTest
     public void resetRestoresDeletedTrackedFile() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-reset-deleted-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Path file = work.resolve("tracked.txt"); //$NON-NLS-1$
             Files.writeString(file, "base"); //$NON-NLS-1$
@@ -263,7 +263,7 @@ public class WorkingChangesTest
     public void discardUnstagedPreservesStagedFiles() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-reset-all-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Path tracked = work.resolve("tracked.txt"); //$NON-NLS-1$
             Path deleted = work.resolve("deleted.txt"); //$NON-NLS-1$

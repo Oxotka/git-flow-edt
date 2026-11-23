@@ -113,6 +113,7 @@ import dev.edt.gitflow.core.RepositorySupport;
 import dev.edt.gitflow.core.StashOperations;
 import dev.edt.gitflow.core.WorkingChanges;
 import dev.edt.gitflow.core.WorkingChanges.FileChange;
+import dev.edt.gitflow.ui.handlers.HostingSettingsDialog;
 import dev.edt.gitflow.ui.handlers.Messages;
 import dev.edt.gitflow.ui.handlers.OpenLinkHandler;
 import dev.edt.gitflow.ui.handlers.OperationJob;
@@ -168,6 +169,7 @@ public class GitFlowView extends ViewPart
     private Button branchButton;
     private Image branchImage;
     private Button syncButton;
+    private MergeRequestPane mergeRequestPane;
     private StyledText messageField;
     private final MessageUndoHistory messageUndoHistory = new MessageUndoHistory();
     private boolean restoringMessageHistory;
@@ -635,7 +637,15 @@ public class GitFlowView extends ViewPart
         content.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         content.setSashWidth(4);
         changesTree = changeTree(content);
-        historyPane = new RecentHistoryPane(content);
+        Composite historyArea = new Composite(content, SWT.NONE);
+        GridLayout historyLayout = new GridLayout(1, false);
+        historyLayout.marginWidth = 0;
+        historyLayout.marginHeight = 0;
+        historyArea.setLayout(historyLayout);
+        mergeRequestPane = new MergeRequestPane(historyArea);
+        syncButton.addListener(SWT.Selection, event -> mergeRequestPane.refresh(selectedRepository()));
+        historyPane = new RecentHistoryPane(historyArea);
+        historyPane.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         historyPane.setMenuProvider(this::historyMenu);
         historyPane.setSearchActions(this::startHistorySearch, this::nextHistoryMatch,
             this::historySearchQueryChanged);
@@ -1082,6 +1092,14 @@ public class GitFlowView extends ViewPart
             }
             updateCommitMessageStyle();
         });
+        new MenuItem(menu, SWT.SEPARATOR);
+        MenuItem hosting = new MenuItem(menu, SWT.PUSH);
+        hosting.setText(HostingSettingsDialog.menuTitle(selectedRepository()));
+        hosting.addListener(SWT.Selection, event ->
+        {
+            if (HostingSettingsDialog.open(getSite().getShell(), selectedRepository()))
+                mergeRequestPane.refreshAfterSettings(selectedRepository());
+        });
         menu.addListener(SWT.Hide, event -> anchor.getDisplay().asyncExec(menu::dispose));
         menu.setLocation(anchor.toDisplay(0, anchor.getSize().y));
         menu.setVisible(true);
@@ -1236,6 +1254,7 @@ public class GitFlowView extends ViewPart
         {
             historyItem(menu, Messages.get("mergeBranch"), () -> mergeBranch(repository)) //$NON-NLS-1$
                 .setEnabled(!isRunning(repository));
+            mergeRequestPane.addCreateAction(menu, repository, !isRunning(repository));
             new MenuItem(menu, SWT.SEPARATOR);
         }
         String upstream = upstream(repository);
@@ -1651,6 +1670,7 @@ public class GitFlowView extends ViewPart
         {
             branchButton.setText(Messages.get("chooseRepository")); //$NON-NLS-1$
             hasRemote = false;
+            mergeRequestPane.hide();
         }
         else
         {
@@ -1658,6 +1678,7 @@ public class GitFlowView extends ViewPart
             {
                 String branch = repository.getBranch();
                 branchButton.setText(branch);
+                mergeRequestPane.refreshIfChanged(repository);
                 BranchConfig config = new BranchConfig(repository.getConfig(), branch);
                 hasRemote = config.getRemoteTrackingBranch() != null || repository.getConfig()
                     .getString("remote", "origin", "url") != null; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -2845,6 +2866,8 @@ public class GitFlowView extends ViewPart
     public void setFocus()
     {
         loadRepositories();
+        if (mergeRequestPane != null)
+            mergeRequestPane.refreshIfChanged(selectedRepository());
         messageField.setFocus();
     }
 

@@ -5,6 +5,8 @@ import static org.junit.Assert.assertEquals;
 import java.util.Locale;
 import java.util.ResourceBundle;
 
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 import dev.edt.gitflow.ui.views.ChangePathFormatter;
@@ -12,6 +14,21 @@ import dev.edt.gitflow.ui.views.ChangePathFormatter.ChangeDisplay;
 
 public class ChangePathFormatterTest
 {
+    private Locale previousLocale;
+
+    @Before
+    public void pinEnglishLocale()
+    {
+        previousLocale = Locale.getDefault();
+        Locale.setDefault(Locale.ENGLISH);
+    }
+
+    @After
+    public void restoreLocale()
+    {
+        Locale.setDefault(previousLocale);
+    }
+
     @Test
     public void showsObjectsAndConfigurationWithTheirIcons()
     {

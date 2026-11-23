@@ -102,16 +102,10 @@ public final class GitLinks
         return null;
     }
 
-    private static String baseUrl(String remote)
+    static String baseUrl(String remote)
     {
         String url = remote;
-        if (remote.matches("^[^@]+@[^:]+:.+$")) //$NON-NLS-1$
-        {
-            int at = remote.indexOf('@');
-            int colon = remote.indexOf(':', at);
-            url = "https://" + remote.substring(at + 1, colon) + "/" + remote.substring(colon + 1); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        else if (remote.startsWith("ssh://")) //$NON-NLS-1$
+        if (remote.startsWith("ssh://")) //$NON-NLS-1$
         {
             try
             {
@@ -122,6 +116,12 @@ public final class GitLinks
             {
                 throw new IllegalArgumentException("Некорректный адрес remote.origin.url.", e); //$NON-NLS-1$
             }
+        }
+        else if (remote.matches("^[^@]+@[^:/]+:.+$")) //$NON-NLS-1$
+        {
+            int at = remote.indexOf('@');
+            int colon = remote.indexOf(':', at);
+            url = "https://" + remote.substring(at + 1, colon) + "/" + remote.substring(colon + 1); //$NON-NLS-1$ //$NON-NLS-2$
         }
         URI uri;
         try

@@ -1,0 +1,631 @@
+package dev.edt.gitflow.ui.handlers;
+
+import java.util.Optional;
+
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.jface.dialogs.Dialog;
+import org.eclipse.jface.dialogs.IDialogConstants;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.program.Program;
+import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Combo;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.FileDialog;
+import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.swt.widgets.Shell;
+import org.eclipse.swt.widgets.Text;
+
+import dev.edt.gitflow.core.GitHubRemote;
+import dev.edt.gitflow.core.GitLabRemote;
+import dev.edt.gitflow.core.HostingException;
+import dev.edt.gitflow.core.HostingProvider;
+import dev.edt.gitflow.core.MergeRequestProvider;
+
+/**
+ * Форма подключения к хостингу: GitLab или GitHub. Адрес сервера
+ * подставляется из репозитория, но остается редактируемым. Тип сервера
+ * выбирается явно: для GitHub Enterprise с доменом без слова github это
+ * единственный способ указать хостинг. Токен — поле со ссылкой на страницу его
+ * выпуска, сертификат — одна ссылка, проверка подключения справа под полями.
+ */
+public final class HostingSettingsDialog extends Dialog
+{
+    private final Repository repository;
+    private HostingSettings settings;
+    private Text serverField;
+    private Combo providerCombo;
+    private Text tokenField;
+    private boolean tokenEdited;
+    private Link certificateLink;
+    private Link tokenHint;
+    private Label prefixesLabel;
+    private Text prefixesField;
+    private Label prefixesHint;
+    private Label resultHeading;
+    private Label resultLabel;
+    private long checkRevision;
+
+    private HostingSettingsDialog(Shell shell, Repository repository)
+    {
+        super(shell);
+        this.repository = repository;
+        this.settings = HostingSettings.load();
+        setShellStyle(getShellStyle() | SWT.RESIZE);
+    }
+
+    public static boolean open(Shell shell, Repository repository)
+    {
+        return new HostingSettingsDialog(shell, repository).open() == OK;
+    }
+
+    @Override
+    protected void configureShell(Shell newShell)
+    {
+        super.configureShell(newShell);
+        newShell.setText(title());
+    }
+
+    public static String menuTitle(Repository repository)
+    {
+        return providerTitle(initialProvider(repository, HostingSettings.load()));
+    }
+
+    private String title()
+    {
+        HostingProvider provider = providerCombo == null || providerCombo.isDisposed()
+            ? initialProvider(repository, settings) : selectedProvider();
+        return providerTitle(provider);
+    }
+
+    private static String providerTitle(HostingProvider provider)
+    {
+        return Messages.get(provider == HostingProvider.GITHUB
+            ? "githubSettings" : "gitLabSettings"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private void updateTitle()
+    {
+        if (getShell() != null && !getShell().isDisposed())
+            getShell().setText(title());
+    }
+
+    @Override
+    protected Control createDialogArea(Composite parent)
+    {
+        Composite area = (Composite) super.createDialogArea(parent);
+        Composite grid = new Composite(area, SWT.NONE);
+        grid.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        GridLayout layout = new GridLayout(2, false);
+        layout.marginWidth = 0;
+        grid.setLayout(layout);
+
+        new Label(grid, SWT.NONE).setText(Messages.get("gitLabAddress")); //$NON-NLS-1$
+        serverField = new Text(grid, SWT.BORDER);
+        serverField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        String host = repositoryHost();
+        // Для своего хоста берем только его сохраненный адрес: общий адрес
+        // другого сервера здесь показывать нельзя, иначе проверка подключения
+        // и сохранение уйдут не на тот хост.
+        String saved = host == null ? settings.baseUrl() : settings.storedBaseUrl(host);
+        String knownServer = repositoryServer();
+        String address = saved == null ? knownServer : saved;
+        serverField.setText(address == null ? "" : address); //$NON-NLS-1$
+
+        new Label(grid, SWT.NONE).setText(Messages.get("hostingProvider")); //$NON-NLS-1$
+        providerCombo = new Combo(grid, SWT.READ_ONLY);
+        providerCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        providerCombo.setItems(Messages.get("hostingProviderGitLab"), //$NON-NLS-1$
+            Messages.get("hostingProviderGitHub")); //$NON-NLS-1$
+        providerCombo.select(initialProvider(repository, settings) == HostingProvider.GITHUB ? 1 : 0);
+        providerCombo.addListener(SWT.Selection, event ->
+        {
+            updateTitle();
+            updateTokenHint();
+            updatePrefixesLabel();
+        });
+
+        prefixesLabel = new Label(grid, SWT.NONE);
+        prefixesField = new Text(grid, SWT.BORDER);
+        prefixesField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        prefixesField.setText(String.join(", ", settings.branchPrefixes())); //$NON-NLS-1$
+        prefixesHint = new Label(grid, SWT.WRAP);
+        GridData prefixesHintLayout = new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1);
+        prefixesHintLayout.widthHint = convertWidthInCharsToPixels(72);
+        prefixesHint.setLayoutData(prefixesHintLayout);
+        updatePrefixesLabel();
+
+        new Label(grid, SWT.NONE).setText(Messages.get("gitLabToken")); //$NON-NLS-1$
+        Composite tokenRow = new Composite(grid, SWT.NONE);
+        GridLayout tokenLayout = new GridLayout(2, false);
+        tokenLayout.marginWidth = 0;
+        tokenLayout.marginHeight = 0;
+        tokenRow.setLayout(tokenLayout);
+        tokenRow.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        tokenField = new Text(tokenRow, SWT.BORDER | SWT.PASSWORD);
+        tokenField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        Button clearToken = new Button(tokenRow, SWT.PUSH);
+        clearToken.setText("×"); //$NON-NLS-1$
+        clearToken.setToolTipText(Messages.get("hostingClearToken")); //$NON-NLS-1$
+        String storedHost = host();
+        if (!settings.token(storedHost).isEmpty())
+            tokenField.setText("••••••••"); //$NON-NLS-1$
+        clearToken.setEnabled(!tokenField.getText().isEmpty());
+        tokenField.addVerifyListener(event ->
+        {
+            if (!tokenEdited)
+            {
+                event.start = 0;
+                event.end = tokenField.getCharCount();
+            }
+        });
+        tokenField.addModifyListener(event ->
+        {
+            tokenEdited = true;
+            clearToken.setEnabled(!tokenField.getText().isEmpty());
+            checkRevision++;
+            resultHeading.setText(""); //$NON-NLS-1$
+            resultLabel.setText(""); //$NON-NLS-1$
+        });
+        clearToken.addListener(SWT.Selection, event -> tokenField.setText("")); //$NON-NLS-1$
+        serverField.addListener(SWT.FocusOut, event ->
+        {
+            String newHost = host();
+            if (newHost.equals(tokenField.getData("host")))
+                return;
+            tokenField.setText(newHost.isEmpty() || settings.token(newHost).isEmpty() ? "" : "••••••••");
+            tokenEdited = false;
+            tokenField.setData("host", newHost);
+        });
+        tokenField.setData("host", storedHost);
+
+        tokenHint = new Link(grid, SWT.WRAP);
+        tokenHint.addListener(SWT.Selection, event -> openTokenPage());
+        GridData hintLayout = new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1);
+        hintLayout.widthHint = convertWidthInCharsToPixels(72);
+        tokenHint.setLayoutData(hintLayout);
+        updateTokenHint();
+
+        certificateLink = new Link(grid, SWT.NONE);
+        certificateLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        certificateLink.addListener(SWT.Selection, event -> showCertificateMenu());
+        updateCertificateLink();
+        if ("win32".equals(SWT.getPlatform())) //$NON-NLS-1$
+        {
+            // На Windows доверия к системному хранилищу достаточно.
+            certificateLink.setVisible(false);
+            ((GridData) certificateLink.getLayoutData()).exclude = true;
+        }
+
+        Button check = new Button(grid, SWT.PUSH);
+        check.setText(Messages.get("gitLabCheck")); //$NON-NLS-1$
+        check.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false, 2, 1));
+        check.addListener(SWT.Selection, event -> checkConnection());
+
+        resultHeading = new Label(grid, SWT.NONE);
+        resultHeading.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        resultLabel = new Label(grid, SWT.WRAP);
+        resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+
+        return area;
+    }
+
+    private static String link(String text)
+    {
+        return "<a>" + text + "</a>"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Тип хостинга по умолчанию: сохраненный для хоста, затем распознанный по
+     * хосту, иначе GitLab.
+     */
+    private static HostingProvider initialProvider(Repository repository, HostingSettings settings)
+    {
+        GitLabRemote remote = repositoryRemote(repository);
+        String host = remote == null ? settings.serverHost() : remote.host();
+        return host == null || host.isBlank() ? HostingProvider.GITLAB : settings.provider(host);
+    }
+
+    private HostingProvider selectedProvider()
+    {
+        return providerCombo.getSelectionIndex() == 1 ? HostingProvider.GITHUB
+            : HostingProvider.GITLAB;
+    }
+
+    private String repositoryServer()
+    {
+        GitLabRemote remote = repositoryRemote(repository);
+        return remote == null ? null : serverRoot(remote);
+    }
+
+    private String repositoryHost()
+    {
+        GitLabRemote remote = repositoryRemote(repository);
+        return remote == null ? null : remote.host();
+    }
+
+    private static GitLabRemote repositoryRemote(Repository repository)
+    {
+        if (repository == null)
+            return null;
+        String url = repository.getConfig().getString("remote", "origin", "url"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (url == null || url.isBlank())
+            return null;
+        try
+        {
+            return GitLabRemote.parse(url);
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
+    }
+
+    private GitLabRemote serverRemote()
+    {
+        try
+        {
+            return GitLabRemote.forServer(serverField.getText());
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
+    }
+
+    private String host()
+    {
+        GitLabRemote remote = serverRemote();
+        return remote == null ? "" : remote.host(); //$NON-NLS-1$
+    }
+
+    /**
+     * Хост введенного адреса. Для сохранения и проверки разбор идет по
+     * выбранному провайдеру: так ошибка в адресе видна сразу.
+     */
+    private static String serverHost(String serverUrl, HostingProvider provider)
+    {
+        String url = serverUrl == null ? "" : serverUrl.trim(); //$NON-NLS-1$
+        if (url.isEmpty())
+            return null;
+        try
+        {
+            return provider == HostingProvider.GITHUB ? GitHubRemote.forServer(url).host()
+                : GitLabRemote.forServer(url).host();
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
+    }
+
+    /** Адрес сервера без завершающих слэшей: так он и сохраняется. */
+    private static String cleanServerUrl(String serverUrl)
+    {
+        String base = serverUrl == null ? "" : serverUrl.trim(); //$NON-NLS-1$
+        while (base.endsWith("/")) //$NON-NLS-1$
+            base = base.substring(0, base.length() - 1);
+        return base;
+    }
+
+    /**
+     * Путь проекта для проверки: из remote репозитория, если проверяется тот же
+     * сервер. Для измененного адреса проверяется корень сервера.
+     */
+    private String projectPath(String serverHost)
+    {
+        GitLabRemote remote = repositoryRemote(repository);
+        if (remote == null || !remote.host().equalsIgnoreCase(serverHost))
+            return ""; //$NON-NLS-1$
+        return remote.projectPath();
+    }
+
+    private void updateTokenHint()
+    {
+        boolean github = selectedProvider() == HostingProvider.GITHUB;
+        String action = Messages.get(github ? "githubCreateToken" : "gitLabTokenWhere"); //$NON-NLS-1$ //$NON-NLS-2$
+        String hint = Messages.get(github ? "githubTokenHint" : "gitLabTokenHint"); //$NON-NLS-1$ //$NON-NLS-2$
+        tokenHint.setText(String.format(hint, link(action), java.time.LocalDate.now().plusDays(360)));
+        tokenHint.getParent().layout();
+    }
+
+    private void updatePrefixesLabel()
+    {
+        if (prefixesLabel == null || prefixesLabel.isDisposed())
+            return;
+        boolean github = selectedProvider() == HostingProvider.GITHUB;
+        prefixesLabel.setText(Messages.get(github
+            ? "hostingBranchPrefixes" : "gitLabBranchPrefixes")); //$NON-NLS-1$ //$NON-NLS-2$
+        prefixesHint.setText(Messages.get(github
+            ? "hostingBranchPrefixesHint" : "gitLabBranchPrefixesHint")); //$NON-NLS-1$ //$NON-NLS-2$
+        prefixesLabel.getParent().layout();
+    }
+
+    private void openTokenPage()
+    {
+        String root = serverRoot();
+        if (root == null)
+            return;
+        if (selectedProvider() == HostingProvider.GITHUB)
+            Program.launch(GitHubRemote.forServer(root).tokenCreationUrl(Messages.get("githubTokenDescription")));
+        else
+            Program.launch(GitLabRemote.forServer(root).tokenCreationUrl(Messages.get("gitLabTokenDescription"))); //$NON-NLS-1$
+    }
+
+    /** Корень сервера: страница токенов живет в корне, а не под путем проекта. */
+    private String serverRoot()
+    {
+        String url = serverField.getText().trim();
+        if (url.isEmpty())
+            return null;
+        try
+        {
+            java.net.URI uri = java.net.URI.create(url);
+            if (uri.getScheme() == null || uri.getRawAuthority() == null)
+                return null;
+            return uri.getScheme() + "://" + uri.getRawAuthority(); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            return null;
+        }
+    }
+
+    /** Страница токенов живет в корне GitLab, а не под путем проекта. */
+    private static String serverRoot(GitLabRemote remote)
+    {
+        java.net.URI uri = java.net.URI.create(remote.webBase());
+        return uri.getScheme() + "://" + uri.getRawAuthority(); //$NON-NLS-1$
+    }
+
+    private void updateCertificateLink()
+    {
+        if (certificateLink == null || certificateLink.isDisposed())
+            return;
+        boolean file = settings.certMode() == HostingSettings.CertMode.FILE
+            && settings.certFile() != null && !settings.certFile().isBlank();
+        String text = file
+            ? String.format(Messages.get("gitLabCertificateFileLink"), //$NON-NLS-1$
+                java.nio.file.Path.of(settings.certFile()).getFileName().toString())
+            : Messages.get("gitLabCertificateOsLink"); //$NON-NLS-1$
+        certificateLink.setText(link(text));
+        certificateLink.getParent().layout();
+    }
+
+    private void showCertificateMenu()
+    {
+        Menu menu = new Menu(certificateLink);
+        MenuItem system = new MenuItem(menu, SWT.RADIO);
+        system.setText(Messages.get("gitLabCertificateWindows")); //$NON-NLS-1$
+        system.setSelection(settings.certMode() != HostingSettings.CertMode.FILE);
+        system.addListener(SWT.Selection, event -> useSystemCertificates());
+        MenuItem file = new MenuItem(menu, SWT.RADIO);
+        file.setText(Messages.get("gitLabCertificateChoose")); //$NON-NLS-1$
+        file.setSelection(settings.certMode() == HostingSettings.CertMode.FILE);
+        file.addListener(SWT.Selection, event -> chooseCertificateFile());
+        menu.setLocation(certificateLink.toDisplay(0, certificateLink.getSize().y));
+        menu.setVisible(true);
+    }
+
+    private void useSystemCertificates()
+    {
+        settings = HostingSettings.forTesting(serverField.getText(), host(),
+            HostingSettings.CertMode.WINDOWS, ""); //$NON-NLS-1$
+        updateCertificateLink();
+    }
+
+    private void chooseCertificateFile()
+    {
+        FileDialog dialog = new FileDialog(getShell(), SWT.OPEN);
+        dialog.setFilterExtensions(new String[] {"*.pem;*.crt;*.cer", "*.*"}); //$NON-NLS-1$ //$NON-NLS-2$
+        String selected = dialog.open();
+        if (selected == null)
+            return;
+        settings = HostingSettings.forTesting(serverField.getText(), host(),
+            HostingSettings.CertMode.FILE, selected);
+        updateCertificateLink();
+    }
+
+    /** Токен из поля, а если оно показывает сохраненный — из настроек. */
+    private String effectiveToken()
+    {
+        if (!tokenEdited)
+            return settings.token(host());
+        return tokenField.getText().trim();
+    }
+
+    private record CheckResult(boolean healthy, String details) {}
+
+    private void showResult(CheckResult result)
+    {
+        resultHeading.setText(Messages.get(result.healthy() ? "hostingCheckOk" : "hostingCheckProblem"));
+        resultHeading.setForeground(resultHeading.getDisplay().getSystemColor(
+            result.healthy() ? SWT.COLOR_DARK_GREEN : SWT.COLOR_RED));
+        resultLabel.setText(result.details());
+        Shell shell = getShell();
+        shell.layout(true, true);
+        int width = shell.getSize().x;
+        int height = shell.computeSize(width, SWT.DEFAULT, true).y;
+        if (height > shell.getSize().y)
+            shell.setSize(width, height);
+    }
+
+    private void checkConnection()
+    {
+        long revision = ++checkRevision;
+        HostingProvider provider = selectedProvider();
+        String serverUrl = cleanServerUrl(serverField.getText());
+        String host = serverHost(serverUrl, provider);
+        if (host == null)
+        {
+            showResult(new CheckResult(false, Messages.get("hostingBadAddress"))); //$NON-NLS-1$
+            return;
+        }
+        final String projectPath = projectPath(host);
+        // Значения полей читаем на потоке UI: из фоновой задачи обращаться к
+        // элементам SWT нельзя.
+        final String token = effectiveToken();
+        final HostingSettings selectedSettings = settings;
+        resultHeading.setText("");
+        resultLabel.setText(Messages.get("gitLabChecking")); //$NON-NLS-1$
+        final var display = resultLabel.getDisplay();
+        Job job = new Job(Messages.get("gitLabCheck")) //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                CheckResult result;
+                try
+                {
+                    HostingLog.write("check start: server=" + serverUrl //$NON-NLS-1$
+                        + " provider=" + provider //$NON-NLS-1$
+                        + " project=" + (projectPath.isEmpty() ? "нет" : projectPath) //$NON-NLS-1$ //$NON-NLS-2$
+                        + " host=" + host //$NON-NLS-1$
+                        + " tokenLength=" + token.length() //$NON-NLS-1$
+                        + " certMode=" + selectedSettings.certMode()); //$NON-NLS-1$
+                    MergeRequestProvider client = HostingConnection.probe(serverUrl, provider,
+                        projectPath, token, selectedSettings);
+                    result = checkResult(client, provider);
+                }
+                catch (IllegalArgumentException e)
+                {
+                    HostingLog.write("check: bad server address", e); //$NON-NLS-1$
+                    result = new CheckResult(false, Messages.get("hostingBadAddress")); //$NON-NLS-1$
+                }
+                catch (HostingException e)
+                {
+                    HostingLog.write("hosting error: " + e.kind(), e); //$NON-NLS-1$
+                    result = new CheckResult(false, textFor(e, provider));
+                }
+                catch (Exception e)
+                {
+                    HostingLog.write("unexpected error", e); //$NON-NLS-1$
+                    result = new CheckResult(false, Messages.get("gitLabUnreachable") + " [" //$NON-NLS-1$ //$NON-NLS-2$
+                        + e.getClass().getSimpleName() + ": " + e.getMessage() + "]"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                final CheckResult completed = result;
+                display.asyncExec(() ->
+                {
+                    if (resultLabel.isDisposed() || revision != checkRevision)
+                        return;
+                    showResult(completed);
+                });
+                return Status.OK_STATUS;
+            }
+        };
+        job.schedule();
+    }
+
+    /**
+     * Итог проверки: текущий пользователь, справочно право на создание запроса
+     * и доступ к участникам. Недоступные участники проверку не отменяют.
+     */
+    private static CheckResult checkResult(MergeRequestProvider client, HostingProvider provider)
+        throws HostingException
+    {
+        StringBuilder text = new StringBuilder(Messages.get("gitLabConnectedAs")) //$NON-NLS-1$
+            .append(' ').append(client.currentUser());
+        boolean healthy = true;
+        Optional<Boolean> canCreate;
+        try
+        {
+            canCreate = client.canCreateRequests();
+        }
+        catch (HostingException e)
+        {
+            // Право на создание запроса — справочный признак: без него проверка
+            // подключения все равно полезна.
+            HostingLog.write("check: create permission " + e.kind(), e); //$NON-NLS-1$
+            healthy = false;
+            text.append(". ").append(textFor(e, provider));
+            canCreate = Optional.empty();
+        }
+        if (!canCreate.orElse(true))
+            text.append(". ").append(Messages.get(provider == HostingProvider.GITHUB //$NON-NLS-1$
+                ? "githubNoWrite" : "gitLabTokenReadOnly")); //$NON-NLS-1$ //$NON-NLS-2$
+        healthy &= canCreate.orElse(true);
+        if (client.projectPath().isBlank())
+            return new CheckResult(healthy, text.toString());
+        try
+        {
+            client.projectMembers();
+            if (provider == HostingProvider.GITHUB)
+                text.append(". ").append(String.format(Messages.get("githubRepositoryAccessible"), //$NON-NLS-1$ //$NON-NLS-2$
+                    client.projectPath()));
+            text.append(". ").append(Messages.get("gitLabMembersAvailable")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        catch (HostingException e)
+        {
+            healthy = false;
+            if (e.kind() == HostingException.Kind.FORBIDDEN)
+                text.append(". ").append(Messages.get(provider == HostingProvider.GITHUB //$NON-NLS-1$
+                    ? "githubMembersHidden" : "gitLabHintMemberRead")); //$NON-NLS-1$ //$NON-NLS-2$
+            else
+                text.append(". ").append(textFor(e, provider)); //$NON-NLS-1$
+        }
+        return new CheckResult(healthy, text.toString());
+    }
+
+    private static String textFor(HostingException error, HostingProvider provider)
+    {
+        boolean github = provider == HostingProvider.GITHUB;
+        return switch (error.kind())
+        {
+            case UNAUTHORIZED -> Messages.get("gitLabTokenRejected"); //$NON-NLS-1$
+            case FORBIDDEN -> Messages.get(github ? "githubNoWrite" : "gitLabTokenReadOnly"); //$NON-NLS-1$ //$NON-NLS-2$
+            case NOT_FOUND -> Messages.get(github ? "githubNotFound" : "gitLabNotFound"); //$NON-NLS-1$ //$NON-NLS-2$
+            case TLS -> Messages.get("gitLabCertificateRejected"); //$NON-NLS-1$
+            case SERVER -> Messages.get(github ? "githubServerError" : "gitLabServerError"); //$NON-NLS-1$ //$NON-NLS-2$
+            case RATE_LIMIT -> github ? Messages.get("githubRateLimit") : fallback(error); //$NON-NLS-1$
+            default -> fallback(error);
+        };
+    }
+
+    private static String fallback(HostingException error)
+    {
+        return Messages.get("gitLabUnreachable") //$NON-NLS-1$
+            + (error.getMessage() == null ? "" : " [" + error.getMessage() + "]"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Override
+    protected void okPressed()
+    {
+        HostingProvider provider = selectedProvider();
+        String serverUrl = cleanServerUrl(serverField.getText());
+        String host = serverHost(serverUrl, provider);
+        if (host == null)
+        {
+            showResult(new CheckResult(false, Messages.get("hostingBadAddress"))); //$NON-NLS-1$
+            return;
+        }
+        try
+        {
+            if (tokenEdited)
+                settings.saveToken(host, tokenField.getText());
+            settings.save(serverUrl, host, provider, settings.certMode(), settings.certFile());
+            settings.saveBranchPrefixes(prefixesField.getText());
+        }
+        catch (IllegalStateException e)
+        {
+            showResult(new CheckResult(false, e.getMessage()));
+            return;
+        }
+        super.okPressed();
+    }
+
+    @Override
+    protected void createButtonsForButtonBar(Composite parent)
+    {
+        createButton(parent, IDialogConstants.OK_ID, Messages.get("gitLabSave"), true); //$NON-NLS-1$
+        createButton(parent, IDialogConstants.CANCEL_ID, IDialogConstants.CANCEL_LABEL, false);
+    }
+}

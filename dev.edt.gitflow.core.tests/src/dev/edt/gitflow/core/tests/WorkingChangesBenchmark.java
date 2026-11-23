@@ -112,7 +112,7 @@ public class WorkingChangesBenchmark
         Fixture(int count) throws Exception
         {
             work = Files.createTempDirectory("gitflow-stage-bench-"); //$NON-NLS-1$
-            git = Git.init().setDirectory(work.toFile()).call();
+            git = TestRepository.init(work.toFile());
             for (int i = 0; i < count; i++)
             {
                 String path = "src/CommonModules/Module" + String.format("%05d", i) + "/Ext/Module.bsl"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

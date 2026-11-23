@@ -48,7 +48,7 @@ public class GitLinksTest
     public void fileLinkUsesCurrentBranchInsteadOfCommitId() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-file-link-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("file.txt"), "content"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$

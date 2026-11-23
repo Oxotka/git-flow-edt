@@ -24,7 +24,7 @@ public class RecentHistoryTest
     public void searchesPastFirstPageByMessageAuthorAndHashPrefix() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-search-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             String oldCommit = null;
             String authorCommit = null;
@@ -69,7 +69,7 @@ public class RecentHistoryTest
     public void findsEachMatchingCommitOnceThenWrapsAfterExhaustion() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-search-wrap-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             String olderMatch = commit(git, directory, 0, "Needle older", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
             commit(git, directory, 1, "No match", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -89,7 +89,7 @@ public class RecentHistoryTest
     public void searchesOnlyCommitsReachableFromCurrentBranch() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-search-branch-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             commit(git, directory, 0, "Base", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
             String currentBranch = git.getRepository().getBranch();
@@ -109,7 +109,7 @@ public class RecentHistoryTest
     public void canceledSearchCanBeRetried() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-search-cancel-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             String hash = commit(git, directory, 0, "Search target", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
             try (RecentHistory.SearchReader search = RecentHistory.openSearch(git.getRepository()))
@@ -136,7 +136,7 @@ public class RecentHistoryTest
     public void bothReadersDecorateCommitsWithBranchesAndPeeledTags() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-labels-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             String base = commit(git, directory, 0, "Base\n\nDescription", "Author"); //$NON-NLS-1$ //$NON-NLS-2$
             String branch = git.getRepository().getBranch();
@@ -170,7 +170,7 @@ public class RecentHistoryTest
     public void bothReadersLabelDetachedHead() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-detached-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             String head = commit(git, directory, 0, "Detached", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
             String branch = git.getRepository().getBranch();
@@ -189,7 +189,7 @@ public class RecentHistoryTest
     public void bothReadersKeepMergeParentsAndTopologicalOrder() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-merge-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             String base = commit(git, directory, 0, "Base", "Developer"); //$NON-NLS-1$ //$NON-NLS-2$
             String branch = git.getRepository().getBranch();
@@ -224,7 +224,7 @@ public class RecentHistoryTest
     public void emptyAndExactPageBoundariesDoNotLoseOrRepeatCommits() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-boundaries-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             try (RecentHistory.Reader reader = RecentHistory.open(git.getRepository()))
             {
@@ -275,7 +275,7 @@ public class RecentHistoryTest
     public void readsRecentCommitsWithAuthorAndLimit() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             assertTrue(RecentHistory.read(git.getRepository(), 30).isEmpty());
             for (int i = 0; i < 3; i++)
@@ -327,7 +327,7 @@ public class RecentHistoryTest
     public void readsSequentialPagesWithoutRepeatingCommits() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-pages-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             for (int i = 0; i < 5; i++)
             {
@@ -358,7 +358,7 @@ public class RecentHistoryTest
     public void canceledPageReadCanBeRetried() throws Exception
     {
         Path directory = Files.createTempDirectory("gitflow-history-cancel-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(directory.toFile()).call())
+        try (Git git = TestRepository.init(directory.toFile()))
         {
             Files.writeString(directory.resolve("file.txt"), "content"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$

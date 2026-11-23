@@ -23,7 +23,7 @@ public class CommitOperationsTest
     public void emptyIndexDoesNotStageCommitOrPush() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-empty-index-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("file.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
@@ -51,7 +51,7 @@ public class CommitOperationsTest
     public void localProtectedCommitDoesNotConfigureUpstream() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-protected-permission-"); //$NON-NLS-1$
-        try (Git git = Git.init().setInitialBranch("master").setDirectory(work.toFile()).call()) //$NON-NLS-1$
+        try (Git git = TestRepository.init(work.toFile(), "master")) //$NON-NLS-1$
         {
             var config = git.getRepository().getConfig();
             config.setString("user", null, "name", "Test"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -74,7 +74,7 @@ public class CommitOperationsTest
     public void commitsOnlyIndexAndSupportsFirstCommit() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-index-commit-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("file.txt"), "first"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
@@ -103,7 +103,7 @@ public class CommitOperationsTest
     public void separatesCommitHeaderFromBodyWhenCreatingCommit() throws Exception
     {
         Path work = Files.createTempDirectory("gitflow-commit-message-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(work.toFile()).call())
+        try (Git git = TestRepository.init(work.toFile()))
         {
             var config = git.getRepository().getConfig();
             config.setString("user", null, "name", "Test"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -127,7 +127,7 @@ public class CommitOperationsTest
         Path bare = root.resolve("origin.git"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git git = Git.init().setDirectory(work.toFile()).call())
+             Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("file.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
@@ -153,7 +153,7 @@ public class CommitOperationsTest
         Path bare = root.resolve("origin.git"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git git = Git.init().setDirectory(work.toFile()).call())
+             Git git = TestRepository.init(work.toFile()))
         {
             Files.writeString(work.resolve("file.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
@@ -197,7 +197,7 @@ public class CommitOperationsTest
         Path seed = root.resolve("seed"); //$NON-NLS-1$
         Path work = root.resolve("work"); //$NON-NLS-1$
         try (Git origin = Git.init().setBare(true).setDirectory(bare.toFile()).call();
-             Git source = Git.init().setDirectory(seed.toFile()).call())
+             Git source = TestRepository.init(seed.toFile()))
         {
             Files.writeString(seed.resolve("module.bsl"), "first\nsecond\nthird\nfourth\nfifth\nsixth\n"); //$NON-NLS-1$ //$NON-NLS-2$
             source.add().addFilepattern("module.bsl").call(); //$NON-NLS-1$
@@ -238,7 +238,7 @@ public class CommitOperationsTest
     public void acceptsPlainMessageAndProtectsMainBranch() throws Exception
     {
         Path root = Files.createTempDirectory("gitflow-safe-commit-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(root.toFile()).call())
+        try (Git git = TestRepository.init(root.toFile()))
         {
             Files.writeString(root.resolve("file.txt"), "base"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
@@ -262,7 +262,7 @@ public class CommitOperationsTest
     public void commitsResolvedMergeWithMultilineMessage() throws Exception
     {
         Path root = Files.createTempDirectory("gitflow-merge-commit-"); //$NON-NLS-1$
-        try (Git git = Git.init().setDirectory(root.toFile()).call())
+        try (Git git = TestRepository.init(root.toFile()))
         {
             Files.writeString(root.resolve("file.txt"), "base\n"); //$NON-NLS-1$ //$NON-NLS-2$
             git.add().addFilepattern("file.txt").call(); //$NON-NLS-1$
