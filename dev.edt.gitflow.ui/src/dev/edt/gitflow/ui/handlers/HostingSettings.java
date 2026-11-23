@@ -284,8 +284,8 @@ public final class HostingSettings
             }
             if (value == null)
                 value = ""; //$NON-NLS-1$
-            TOKENS.put(key, value);
-            return value;
+            String concurrent = TOKENS.putIfAbsent(key, value);
+            return concurrent == null ? value : concurrent;
         }
         catch (Exception e)
         {
@@ -299,7 +299,14 @@ public final class HostingSettings
         {
             ISecurePreferences node = secureNode();
             String clean = token == null ? "" : token.trim(); //$NON-NLS-1$
-            node.put(TOKEN_PREFIX + normalize(host), clean, true);
+            String key = normalize(host);
+            if (clean.isEmpty())
+            {
+                node.remove(LEGACY_TOKEN_PREFIX + key);
+                node.remove(TOKEN_PREFIX + key);
+            }
+            else
+                node.put(TOKEN_PREFIX + key, clean, true);
             node.flush();
             TOKENS.put(normalize(host), clean);
         }

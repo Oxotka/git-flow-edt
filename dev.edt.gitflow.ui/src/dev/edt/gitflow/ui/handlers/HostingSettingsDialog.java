@@ -45,6 +45,7 @@ public final class HostingSettingsDialog extends Dialog
     private Text serverField;
     private Combo providerCombo;
     private Text tokenField;
+    private boolean tokenEdited;
     private Link certificateLink;
     private Link tokenHint;
     private Label prefixesLabel;
@@ -144,23 +145,48 @@ public final class HostingSettingsDialog extends Dialog
         updatePrefixesLabel();
 
         new Label(grid, SWT.NONE).setText(Messages.get("gitLabToken")); //$NON-NLS-1$
-        tokenField = new Text(grid, SWT.BORDER | SWT.PASSWORD);
+        Composite tokenRow = new Composite(grid, SWT.NONE);
+        GridLayout tokenLayout = new GridLayout(2, false);
+        tokenLayout.marginWidth = 0;
+        tokenLayout.marginHeight = 0;
+        tokenRow.setLayout(tokenLayout);
+        tokenRow.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        tokenField = new Text(tokenRow, SWT.BORDER | SWT.PASSWORD);
         tokenField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        String existing = settings.token(host());
-        if (!existing.isEmpty())
+        Button clearToken = new Button(tokenRow, SWT.PUSH);
+        clearToken.setText("×"); //$NON-NLS-1$
+        clearToken.setToolTipText(Messages.get("hostingClearToken")); //$NON-NLS-1$
+        String storedHost = host();
+        if (!settings.token(storedHost).isEmpty())
+            tokenField.setText("••••••••"); //$NON-NLS-1$
+        clearToken.setEnabled(!tokenField.getText().isEmpty());
+        tokenField.addVerifyListener(event ->
         {
-            // Токен уже сохранен: поле заполнено маскировкой, значение не раскрываем.
-            tokenField.setText(existing.repeat(1).replaceAll(".", "•")); //$NON-NLS-1$ //$NON-NLS-2$
-            tokenField.setData("saved", Boolean.TRUE); //$NON-NLS-1$
-        }
-        tokenField.addListener(SWT.FocusIn, event ->
-        {
-            if (Boolean.TRUE.equals(tokenField.getData("saved"))) //$NON-NLS-1$
+            if (!tokenEdited)
             {
-                tokenField.setData("saved", null); //$NON-NLS-1$
-                tokenField.setText(""); //$NON-NLS-1$
+                event.start = 0;
+                event.end = tokenField.getCharCount();
             }
         });
+        tokenField.addModifyListener(event ->
+        {
+            tokenEdited = true;
+            clearToken.setEnabled(!tokenField.getText().isEmpty());
+            checkRevision++;
+            resultHeading.setText(""); //$NON-NLS-1$
+            resultLabel.setText(""); //$NON-NLS-1$
+        });
+        clearToken.addListener(SWT.Selection, event -> tokenField.setText("")); //$NON-NLS-1$
+        serverField.addListener(SWT.FocusOut, event ->
+        {
+            String newHost = host();
+            if (newHost.equals(tokenField.getData("host")))
+                return;
+            tokenField.setText(newHost.isEmpty() || settings.token(newHost).isEmpty() ? "" : "••••••••");
+            tokenEdited = false;
+            tokenField.setData("host", newHost);
+        });
+        tokenField.setData("host", storedHost);
 
         tokenHint = new Link(grid, SWT.WRAP);
         tokenHint.addListener(SWT.Selection, event -> openTokenPage());
@@ -308,7 +334,7 @@ public final class HostingSettingsDialog extends Dialog
         boolean github = selectedProvider() == HostingProvider.GITHUB;
         String action = Messages.get(github ? "githubCreateToken" : "gitLabTokenWhere"); //$NON-NLS-1$ //$NON-NLS-2$
         String hint = Messages.get(github ? "githubTokenHint" : "gitLabTokenHint"); //$NON-NLS-1$ //$NON-NLS-2$
-        tokenHint.setText(String.format(hint, link(action), java.time.LocalDate.now().plusDays(365)));
+        tokenHint.setText(String.format(hint, link(action), java.time.LocalDate.now().plusDays(360)));
         tokenHint.getParent().layout();
     }
 
@@ -412,7 +438,7 @@ public final class HostingSettingsDialog extends Dialog
     /** Токен из поля, а если оно показывает сохраненный — из настроек. */
     private String effectiveToken()
     {
-        if (Boolean.TRUE.equals(tokenField.getData("saved"))) //$NON-NLS-1$
+        if (!tokenEdited)
             return settings.token(host());
         return tokenField.getText().trim();
     }
@@ -581,21 +607,17 @@ public final class HostingSettingsDialog extends Dialog
             showResult(new CheckResult(false, Messages.get("hostingBadAddress"))); //$NON-NLS-1$
             return;
         }
-        settings.save(serverUrl, host, provider, settings.certMode(),
-            settings.certFile());
-        settings.saveBranchPrefixes(prefixesField.getText());
-        String token = effectiveToken();
-        if (!token.isEmpty())
+        try
         {
-            try
-            {
-                settings.saveToken(host, token);
-            }
-            catch (IllegalStateException e)
-            {
-                showResult(new CheckResult(false, e.getMessage()));
-                return;
-            }
+            if (tokenEdited)
+                settings.saveToken(host, tokenField.getText());
+            settings.save(serverUrl, host, provider, settings.certMode(), settings.certFile());
+            settings.saveBranchPrefixes(prefixesField.getText());
+        }
+        catch (IllegalStateException e)
+        {
+            showResult(new CheckResult(false, e.getMessage()));
+            return;
         }
         super.okPressed();
     }

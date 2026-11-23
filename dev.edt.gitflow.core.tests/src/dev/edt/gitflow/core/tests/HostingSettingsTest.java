@@ -9,6 +9,7 @@ import java.util.List;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.junit.Test;
+import org.eclipse.equinox.security.storage.SecurePreferencesFactory;
 import org.osgi.service.prefs.Preferences;
 
 import dev.edt.gitflow.core.HostingProvider;
@@ -17,6 +18,30 @@ import dev.edt.gitflow.ui.handlers.HostingSettings;
 public class HostingSettingsTest
 {
     private static final String PLUGIN_ID = "dev.edt.gitflow.ui"; //$NON-NLS-1$
+
+    @Test
+    public void clearingTokenRemovesCachedAndLegacyCredentials() throws Exception
+    {
+        String host = java.util.UUID.randomUUID() + ".invalid";
+        var node = SecurePreferencesFactory.getDefault().node("dev.edt.gitflow.ui");
+        var settings = HostingSettings.forTesting("https://" + host, host, HostingProvider.GITLAB);
+        try
+        {
+            node.put("hosting.token." + host, "current-test-value", false);
+            node.put("gitlab.token." + host, "legacy-test-value", false);
+            assertEquals("current-test-value", settings.token(host));
+            settings.saveToken(host, "");
+            assertEquals("", settings.token(host));
+            assertNull(node.get("hosting.token." + host, null));
+            assertNull(node.get("gitlab.token." + host, null));
+        }
+        finally
+        {
+            node.remove("hosting.token." + host);
+            node.remove("gitlab.token." + host);
+            node.flush();
+        }
+    }
 
     @Test
     public void matchesOnlyConfiguredHost()

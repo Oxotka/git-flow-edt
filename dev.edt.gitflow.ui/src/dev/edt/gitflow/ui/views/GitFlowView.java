@@ -1098,7 +1098,7 @@ public class GitFlowView extends ViewPart
         hosting.addListener(SWT.Selection, event ->
         {
             if (HostingSettingsDialog.open(getSite().getShell(), selectedRepository()))
-                mergeRequestPane.refresh(selectedRepository());
+                mergeRequestPane.refreshAfterSettings(selectedRepository());
         });
         menu.addListener(SWT.Hide, event -> anchor.getDisplay().asyncExec(menu::dispose));
         menu.setLocation(anchor.toDisplay(0, anchor.getSize().y));

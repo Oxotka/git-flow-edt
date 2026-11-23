@@ -100,7 +100,7 @@ public final class GitHubRemote
     {
         URI uri = URI.create(webBase);
         return uri.getScheme() + "://" + uri.getRawAuthority() //$NON-NLS-1$
-            + "/settings/personal-access-tokens/new?name=EDT%20Git%20Flow&expires_in=365&contents=read&pull_requests=write&description="
+            + "/settings/personal-access-tokens/new?name=EDT%20Git%20Flow&expires_in=360&contents=read&pull_requests=write&description="
             + java.net.URLEncoder.encode(description, java.nio.charset.StandardCharsets.UTF_8); //$NON-NLS-1$
     }
 }

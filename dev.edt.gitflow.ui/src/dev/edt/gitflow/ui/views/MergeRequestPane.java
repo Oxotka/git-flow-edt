@@ -65,7 +65,7 @@ final class MergeRequestPane
             if ("settings".equals(event.text)) //$NON-NLS-1$
             {
                 if (HostingSettingsDialog.open(composite.getShell(), repository))
-                    refresh(repository);
+                    refreshAfterSettings(repository);
             }
             else if ("create".equals(event.text)) //$NON-NLS-1$
                 openCreateDialog(repository);
@@ -81,6 +81,12 @@ final class MergeRequestPane
     {
         if (!session.matches(key(repository)))
             refresh(repository);
+    }
+
+    void refreshAfterSettings(Repository selected)
+    {
+        hide();
+        refresh(selected);
     }
 
     void refresh(Repository repository)
@@ -187,7 +193,7 @@ final class MergeRequestPane
                     link.setText(result);
                     composite.setVisible(true);
                     excludeRow(false);
-                    composite.getParent().layout();
+                    composite.getParent().layout(true, true);
                 });
                 return Status.OK_STATUS;
             }
@@ -259,7 +265,7 @@ final class MergeRequestPane
             return;
         composite.setVisible(false);
         excludeRow(true);
-        composite.getParent().layout();
+        composite.getParent().layout(true, true);
     }
 
     private void excludeRow(boolean excluded)
