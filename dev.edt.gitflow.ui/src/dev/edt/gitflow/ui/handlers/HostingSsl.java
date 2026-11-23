@@ -12,7 +12,7 @@ import javax.net.ssl.TrustManagerFactory;
 
 /**
  * Доверие серверу хостинга. На Windows берется системное хранилище, на остальных
- * платформах — файл сертификата из настроек. Проверка сертификата не отключается
+ * платформах — стандартное доверие JVM или файл сертификата из настроек. Проверка сертификата не отключается
  * никогда.
  */
 public final class HostingSsl
@@ -52,7 +52,8 @@ public final class HostingSsl
         if (settings.certMode() == HostingSettings.CertMode.FILE
             && settings.certFile() != null && !settings.certFile().isBlank())
             return fromFile(Path.of(settings.certFile()));
-        if (settings.certMode() == HostingSettings.CertMode.WINDOWS)
+        if (settings.certMode() == HostingSettings.CertMode.WINDOWS
+            && System.getProperty("os.name", "").startsWith("Windows")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return fromWindowsStore();
         return null;
     }

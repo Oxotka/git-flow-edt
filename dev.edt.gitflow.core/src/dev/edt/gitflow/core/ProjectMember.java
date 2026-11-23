@@ -37,6 +37,14 @@ public final class ProjectMember
         return name == null || name.isBlank() ? username : name;
     }
 
+    /** Подпись в поле выбора: логин различает участников с одинаковым именем. */
+    public String reviewerLabel()
+    {
+        String label = displayName();
+        return username == null || username.isBlank() || username.equalsIgnoreCase(label)
+            ? label : label + " (@" + username + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     @Override
     public String toString()
     {

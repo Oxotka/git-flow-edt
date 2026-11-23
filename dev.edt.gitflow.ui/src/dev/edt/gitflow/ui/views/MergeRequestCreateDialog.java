@@ -10,6 +10,9 @@ import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.dialogs.Dialog;
 import org.eclipse.jface.dialogs.IDialogConstants;
+import org.eclipse.jface.fieldassist.ComboContentAdapter;
+import org.eclipse.jface.fieldassist.ContentProposal;
+import org.eclipse.jface.fieldassist.ContentProposalAdapter;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -22,7 +25,6 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
 import dev.edt.gitflow.core.CreateMergeRequest;
-import dev.edt.gitflow.core.GitLabClient;
 import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.MergeRequestProvider;
 import dev.edt.gitflow.core.MergeRequestStatus;
@@ -51,6 +53,7 @@ final class MergeRequestCreateDialog extends Dialog
     private Combo reviewerCombo;
     private final List<ProjectMember> reviewerOptions = new ArrayList<>();
     private MergeRequestStatus created;
+    private boolean creating;
 
     MergeRequestCreateDialog(Shell shell, MergeRequestProvider client, String sourceBranch,
         String suggestedTitle, List<String> targets)
@@ -100,16 +103,15 @@ final class MergeRequestCreateDialog extends Dialog
             ? "mergeRequestReviewer" : "mergeRequestReviewerOptional")); //$NON-NLS-1$ //$NON-NLS-2$
         reviewerCombo = new Combo(grid, SWT.DROP_DOWN);
         reviewerCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        reviewerCombo.addListener(SWT.Modify, event -> filterReviewers());
-        // Enter внутри поля выбирает подсказку, а не создает merge request.
-        reviewerCombo.addListener(SWT.KeyDown, event ->
-        {
-            if (event.keyCode == SWT.CR || event.keyCode == SWT.KEYPAD_CR)
-            {
-                event.doit = false;
-                selectFirstReviewer();
-            }
-        });
+        // Подсказки выводятся отдельно: выбор в нативном списке Combo тоже
+        // вызывает Modify, поэтому менять его элементы из Modify нельзя.
+        ContentProposalAdapter proposals = new ContentProposalAdapter(reviewerCombo,
+            new ComboContentAdapter(), (text, position) -> reviewerOptions.stream()
+                .map(ProjectMember::reviewerLabel)
+                .filter(name -> !text.isBlank() && name.toLowerCase(java.util.Locale.ROOT)
+                    .contains(text.toLowerCase(java.util.Locale.ROOT)))
+                .map(ContentProposal::new).toArray(ContentProposal[]::new), null, null);
+        proposals.setProposalAcceptanceStyle(ContentProposalAdapter.PROPOSAL_REPLACE);
         reviewerLabel.setVisible(false);
         reviewerCombo.setVisible(false);
         loadReviewers();
@@ -134,7 +136,7 @@ final class MergeRequestCreateDialog extends Dialog
     private void loadReviewers()
     {
         String projectPath = client.projectPath();
-        for (ProjectMember member : ReviewerCache.recent(projectPath))
+        for (ProjectMember member : ReviewerCache.recent(client.host(), projectPath))
             reviewerOptions.add(member);
         applyReviewerOptions();
         final var display = reviewerCombo.getDisplay();
@@ -159,7 +161,6 @@ final class MergeRequestCreateDialog extends Dialog
                 {
                     if (reviewerCombo.isDisposed())
                         return;
-                    String selected = reviewerCombo.getText();
                     for (ProjectMember member : members)
                     {
                         boolean known = reviewerOptions.stream()
@@ -168,8 +169,6 @@ final class MergeRequestCreateDialog extends Dialog
                             reviewerOptions.add(member);
                     }
                     applyReviewerOptions();
-                    if (!selected.isEmpty())
-                        reviewerCombo.setText(selected);
                 });
                 return Status.OK_STATUS;
             }
@@ -190,7 +189,7 @@ final class MergeRequestCreateDialog extends Dialog
         if (!visible)
             return;
         String previous = reviewerCombo.getText();
-        reviewerCombo.setItems(reviewerOptions.stream().map(ProjectMember::displayName)
+        reviewerCombo.setItems(reviewerOptions.stream().map(ProjectMember::reviewerLabel)
             .toArray(String[]::new));
         if (!previous.isEmpty())
             reviewerCombo.setText(previous);
@@ -202,42 +201,6 @@ final class MergeRequestCreateDialog extends Dialog
         reviewerCombo.getParent().layout();
     }
 
-    private boolean filtering;
-
-    /** Подсказки в списке проверяющих фильтруются по введенному тексту. */
-    private void filterReviewers()
-    {
-        if (filtering || reviewerOptions.isEmpty())
-            return;
-        String typed = reviewerCombo.getText();
-        filtering = true;
-        try
-        {
-            String[] all = reviewerOptions.stream().map(ProjectMember::displayName)
-                .toArray(String[]::new);
-            String lower = typed.toLowerCase();
-            String[] matching = typed.isEmpty() ? all : java.util.Arrays.stream(all)
-                .filter(name -> name.toLowerCase().contains(lower)).toArray(String[]::new);
-            reviewerCombo.setItems(matching);
-            reviewerCombo.setText(typed);
-            reviewerCombo.setSelection(new org.eclipse.swt.graphics.Point(typed.length(), typed.length()));
-        }
-        finally
-        {
-            filtering = false;
-        }
-    }
-
-    /** Берет первую подсказку из отфильтрованного списка. */
-    private void selectFirstReviewer()
-    {
-        if (reviewerCombo.getItemCount() == 0)
-            return;
-        String first = reviewerCombo.getItem(0);
-        reviewerCombo.setText(first);
-        reviewerCombo.setSelection(new org.eclipse.swt.graphics.Point(first.length(), first.length()));
-    }
-
     private ProjectMember selectedReviewer()
     {
         String typed = reviewerCombo.getText().trim();
@@ -245,7 +208,7 @@ final class MergeRequestCreateDialog extends Dialog
             return null;
         for (ProjectMember member : reviewerOptions)
         {
-            if (typed.equalsIgnoreCase(member.displayName())
+            if (typed.equalsIgnoreCase(member.reviewerLabel())
                 || typed.equalsIgnoreCase(member.username()))
                 return member;
         }
@@ -264,10 +227,21 @@ final class MergeRequestCreateDialog extends Dialog
     @Override
     protected void okPressed()
     {
+        if (creating)
+            return;
         String title = titleField.getText().trim();
         if (title.isEmpty())
         {
             resultLabel.setText(Messages.get("mergeRequestTitleRequired")); //$NON-NLS-1$
+            return;
+        }
+        String target = targetField.getText().trim();
+        if (target.isEmpty() || target.equals(sourceBranch))
+        {
+            resultLabel.setText(Messages.get(target.isEmpty()
+                ? "mergeRequestTargetRequired" : "mergeRequestTargetIsSource")); //$NON-NLS-1$ //$NON-NLS-2$
+            resultLabel.getParent().layout();
+            targetField.setFocus();
             return;
         }
         if (client.requiresReviewer() && !reviewerOptions.isEmpty()
@@ -276,8 +250,7 @@ final class MergeRequestCreateDialog extends Dialog
             resultLabel.setText(Messages.get("mergeRequestReviewerRequired")); //$NON-NLS-1$
             return;
         }
-        CreateMergeRequest request = new CreateMergeRequest(sourceBranch,
-            targetField.getText().trim(), title)
+        CreateMergeRequest request = new CreateMergeRequest(sourceBranch, target, title)
                 .description(descriptionField.getText())
                 .draft(draftButton.getSelection())
                 .removeSourceBranch(removeBranchButton != null
@@ -285,6 +258,8 @@ final class MergeRequestCreateDialog extends Dialog
         ProjectMember reviewer = selectedReviewer();
         if (reviewer != null)
             request.reviewer(reviewer);
+        creating = true;
+        getButton(IDialogConstants.OK_ID).setEnabled(false);
         resultLabel.setText(String.format(Messages.get("mergeRequestCreating"), //$NON-NLS-1$
             client.requestFullName()));
         final var display = resultLabel.getDisplay();
@@ -293,11 +268,11 @@ final class MergeRequestCreateDialog extends Dialog
             @Override
             protected IStatus run(IProgressMonitor monitor)
             {
-                MergeRequestStatus result = null;
+                MergeRequestProvider.CreationResult result = null;
                 String error = null;
                 try
                 {
-                    result = client.createMergeRequest(request);
+                    result = client.createWithReviewerResult(request);
                 }
                 catch (HostingException e)
                 {
@@ -319,7 +294,7 @@ final class MergeRequestCreateDialog extends Dialog
                     error = String.format(Messages.get("mergeRequestUnavailable"), //$NON-NLS-1$
                         client.requestShortName());
                 }
-                final MergeRequestStatus value = result;
+                final MergeRequestProvider.CreationResult value = result;
                 final String message = error;
                 display.asyncExec(() ->
                 {
@@ -327,15 +302,16 @@ final class MergeRequestCreateDialog extends Dialog
                         return;
                     if (message != null)
                     {
+                        creating = false;
+                        getButton(IDialogConstants.OK_ID).setEnabled(true);
                         resultLabel.setText(message);
                         return;
                     }
-                    created = value;
-                    ProjectMember chosen = selectedReviewer();
+                    created = value.status();
                     // Логин, введенный вручную, не несет id участника: в кеш
                     // попадают только выбранные из списка участники проекта.
-                    if (chosen != null && chosen.id() > 0)
-                        ReviewerCache.remember(client.projectPath(), chosen);
+                    if (!value.reviewerAssignmentFailed() && reviewer != null && reviewer.id() > 0)
+                        ReviewerCache.remember(client.host(), client.projectPath(), reviewer);
                     okPressedDone();
                 });
                 return Status.OK_STATUS;
@@ -353,8 +329,9 @@ final class MergeRequestCreateDialog extends Dialog
     @Override
     protected void createButtonsForButtonBar(Composite parent)
     {
+        // Enter в полях принадлежит самому полю, у диалога нет кнопки по умолчанию.
         createButton(parent, IDialogConstants.OK_ID, String.format(
-            Messages.get("mergeRequestCreate"), client.requestShortName()), true); //$NON-NLS-1$
+            Messages.get("mergeRequestCreate"), client.requestShortName()), false); //$NON-NLS-1$
         createButton(parent, IDialogConstants.CANCEL_ID, IDialogConstants.CANCEL_LABEL, false);
     }
 

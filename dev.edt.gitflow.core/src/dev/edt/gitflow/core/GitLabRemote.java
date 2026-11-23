@@ -60,6 +60,14 @@ public final class GitLabRemote
         return new GitLabRemote(uri.getHost(), root, "", api); //$NON-NLS-1$
     }
 
+    public String tokenCreationUrl(String description)
+    {
+        URI uri = URI.create(webBase);
+        return uri.getScheme() + "://" + uri.getRawAuthority()
+            + "/-/user_settings/personal_access_tokens?name=EDT%20Git%20Flow&scopes=api&description="
+            + java.net.URLEncoder.encode(description, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     public String host()
     {
         return host;

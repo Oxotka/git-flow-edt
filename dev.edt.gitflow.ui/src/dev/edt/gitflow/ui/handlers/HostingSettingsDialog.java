@@ -1,12 +1,13 @@
 package dev.edt.gitflow.ui.handlers;
 
+import java.util.Optional;
+
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.dialogs.Dialog;
 import org.eclipse.jface.dialogs.IDialogConstants;
-import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -45,11 +46,13 @@ public final class HostingSettingsDialog extends Dialog
     private Combo providerCombo;
     private Text tokenField;
     private Link certificateLink;
-    private Link tokenLink;
-    private Label tokenHint;
+    private Link tokenHint;
     private Label prefixesLabel;
     private Text prefixesField;
+    private Label prefixesHint;
+    private Label resultHeading;
     private Label resultLabel;
+    private long checkRevision;
 
     private HostingSettingsDialog(Shell shell, Repository repository)
     {
@@ -59,9 +62,9 @@ public final class HostingSettingsDialog extends Dialog
         setShellStyle(getShellStyle() | SWT.RESIZE);
     }
 
-    public static void open(Shell shell, Repository repository)
+    public static boolean open(Shell shell, Repository repository)
     {
-        new HostingSettingsDialog(shell, repository).open();
+        return new HostingSettingsDialog(shell, repository).open() == OK;
     }
 
     @Override
@@ -71,28 +74,22 @@ public final class HostingSettingsDialog extends Dialog
         newShell.setText(title());
     }
 
-    /**
-     * Заголовок формы: у известного хоста виден тип хостинга, иначе нейтральный
-     * «Хостинг…». Тип меняется вместе с выбором в форме.
-     */
-    private String title()
+    public static String menuTitle(Repository repository)
     {
-        if (knownHost() == null)
-        {
-            // Репозиторий не выбран или remote не разобран: тип сервера еще не
-            // известен, заголовок нейтральный.
-            return Messages.get("hostingSettings"); //$NON-NLS-1$
-        }
-        return Messages.get(currentProvider() == HostingProvider.GITHUB
-            ? "githubSettings" : "gitLabSettings"); //$NON-NLS-1$ //$NON-NLS-2$
+        return providerTitle(initialProvider(repository, HostingSettings.load()));
     }
 
-    /** Провайдер из формы, а до создания списка — значение по умолчанию. */
-    private HostingProvider currentProvider()
+    private String title()
     {
-        if (providerCombo == null || providerCombo.isDisposed())
-            return initialProvider();
-        return selectedProvider();
+        HostingProvider provider = providerCombo == null || providerCombo.isDisposed()
+            ? initialProvider(repository, settings) : selectedProvider();
+        return providerTitle(provider);
+    }
+
+    private static String providerTitle(HostingProvider provider)
+    {
+        return Messages.get(provider == HostingProvider.GITHUB
+            ? "githubSettings" : "gitLabSettings"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private void updateTitle()
@@ -128,14 +125,23 @@ public final class HostingSettingsDialog extends Dialog
         providerCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         providerCombo.setItems(Messages.get("hostingProviderGitLab"), //$NON-NLS-1$
             Messages.get("hostingProviderGitHub")); //$NON-NLS-1$
-        providerCombo.select(initialProvider() == HostingProvider.GITHUB ? 1 : 0);
+        providerCombo.select(initialProvider(repository, settings) == HostingProvider.GITHUB ? 1 : 0);
         providerCombo.addListener(SWT.Selection, event ->
         {
             updateTitle();
-            updateTokenLinkText();
             updateTokenHint();
             updatePrefixesLabel();
         });
+
+        prefixesLabel = new Label(grid, SWT.NONE);
+        prefixesField = new Text(grid, SWT.BORDER);
+        prefixesField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        prefixesField.setText(String.join(", ", settings.branchPrefixes())); //$NON-NLS-1$
+        prefixesHint = new Label(grid, SWT.WRAP);
+        GridData prefixesHintLayout = new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1);
+        prefixesHintLayout.widthHint = convertWidthInCharsToPixels(72);
+        prefixesHint.setLayoutData(prefixesHintLayout);
+        updatePrefixesLabel();
 
         new Label(grid, SWT.NONE).setText(Messages.get("gitLabToken")); //$NON-NLS-1$
         tokenField = new Text(grid, SWT.BORDER | SWT.PASSWORD);
@@ -156,23 +162,15 @@ public final class HostingSettingsDialog extends Dialog
             }
         });
 
-        tokenLink = new Link(grid, SWT.NONE);
-        tokenLink.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false, 2, 1));
-        tokenLink.addListener(SWT.Selection, event -> openTokenPage());
-        updateTokenLinkText();
-
-        tokenHint = new Label(grid, SWT.WRAP);
-        tokenHint.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        tokenHint = new Link(grid, SWT.WRAP);
+        tokenHint.addListener(SWT.Selection, event -> openTokenPage());
+        GridData hintLayout = new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1);
+        hintLayout.widthHint = convertWidthInCharsToPixels(72);
+        tokenHint.setLayoutData(hintLayout);
         updateTokenHint();
 
-        prefixesLabel = new Label(grid, SWT.NONE);
-        prefixesField = new Text(grid, SWT.BORDER);
-        prefixesField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        prefixesField.setText(String.join(", ", settings.branchPrefixes())); //$NON-NLS-1$
-        updatePrefixesLabel();
-
         certificateLink = new Link(grid, SWT.NONE);
-        certificateLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        certificateLink.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
         certificateLink.addListener(SWT.Selection, event -> showCertificateMenu());
         updateCertificateLink();
         if ("win32".equals(SWT.getPlatform())) //$NON-NLS-1$
@@ -182,13 +180,16 @@ public final class HostingSettingsDialog extends Dialog
             ((GridData) certificateLink.getLayoutData()).exclude = true;
         }
 
-        resultLabel = new Label(grid, SWT.WRAP);
-        resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-
         Button check = new Button(grid, SWT.PUSH);
         check.setText(Messages.get("gitLabCheck")); //$NON-NLS-1$
         check.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false, 2, 1));
         check.addListener(SWT.Selection, event -> checkConnection());
+
+        resultHeading = new Label(grid, SWT.NONE);
+        resultHeading.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        resultLabel = new Label(grid, SWT.WRAP);
+        resultLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+
         return area;
     }
 
@@ -201,15 +202,11 @@ public final class HostingSettingsDialog extends Dialog
      * Тип хостинга по умолчанию: сохраненный для хоста, затем распознанный по
      * хосту, иначе GitLab.
      */
-    private HostingProvider initialProvider()
+    private static HostingProvider initialProvider(Repository repository, HostingSettings settings)
     {
-        String host = knownHost();
-        if (host == null)
-            return HostingProvider.GITLAB;
-        HostingProvider provider = settings.provider(host);
-        if (provider == null)
-            provider = HostingProvider.detect(host);
-        return provider == null ? HostingProvider.GITLAB : provider;
+        GitLabRemote remote = repositoryRemote(repository);
+        String host = remote == null ? settings.serverHost() : remote.host();
+        return host == null || host.isBlank() ? HostingProvider.GITLAB : settings.provider(host);
     }
 
     private HostingProvider selectedProvider()
@@ -220,30 +217,17 @@ public final class HostingSettingsDialog extends Dialog
 
     private String repositoryServer()
     {
-        GitLabRemote remote = repositoryRemote();
+        GitLabRemote remote = repositoryRemote(repository);
         return remote == null ? null : serverRoot(remote);
     }
 
     private String repositoryHost()
     {
-        GitLabRemote remote = repositoryRemote();
+        GitLabRemote remote = repositoryRemote(repository);
         return remote == null ? null : remote.host();
     }
 
-    /**
-     * Хост, для которого открыта форма: из репозитория, а если он не выбран —
-     * сохраненный в настройках. По нему выбираются заголовок и тип хостинга.
-     */
-    private String knownHost()
-    {
-        String host = repositoryHost();
-        if (host != null)
-            return host;
-        String saved = settings.serverHost();
-        return saved == null || saved.isBlank() ? null : saved;
-    }
-
-    private GitLabRemote repositoryRemote()
+    private static GitLabRemote repositoryRemote(Repository repository)
     {
         if (repository == null)
             return null;
@@ -313,25 +297,18 @@ public final class HostingSettingsDialog extends Dialog
      */
     private String projectPath(String serverHost)
     {
-        GitLabRemote remote = repositoryRemote();
+        GitLabRemote remote = repositoryRemote(repository);
         if (remote == null || !remote.host().equalsIgnoreCase(serverHost))
             return ""; //$NON-NLS-1$
         return remote.projectPath();
     }
 
-    private void updateTokenLinkText()
-    {
-        if (tokenLink == null || tokenLink.isDisposed())
-            return;
-        tokenLink.setText(link(Messages.get("gitLabTokenWhere"))); //$NON-NLS-1$
-    }
-
     private void updateTokenHint()
     {
-        if (tokenHint == null || tokenHint.isDisposed())
-            return;
-        tokenHint.setText(Messages.get(selectedProvider() == HostingProvider.GITHUB
-            ? "githubTokenHint" : "gitLabTokenHint")); //$NON-NLS-1$ //$NON-NLS-2$
+        boolean github = selectedProvider() == HostingProvider.GITHUB;
+        String action = Messages.get(github ? "githubCreateToken" : "gitLabTokenWhere"); //$NON-NLS-1$ //$NON-NLS-2$
+        String hint = Messages.get(github ? "githubTokenHint" : "gitLabTokenHint"); //$NON-NLS-1$ //$NON-NLS-2$
+        tokenHint.setText(String.format(hint, link(action), java.time.LocalDate.now().plusDays(365)));
         tokenHint.getParent().layout();
     }
 
@@ -342,7 +319,7 @@ public final class HostingSettingsDialog extends Dialog
         boolean github = selectedProvider() == HostingProvider.GITHUB;
         prefixesLabel.setText(Messages.get(github
             ? "hostingBranchPrefixes" : "gitLabBranchPrefixes")); //$NON-NLS-1$ //$NON-NLS-2$
-        prefixesField.setToolTipText(Messages.get(github
+        prefixesHint.setText(Messages.get(github
             ? "hostingBranchPrefixesHint" : "gitLabBranchPrefixesHint")); //$NON-NLS-1$ //$NON-NLS-2$
         prefixesLabel.getParent().layout();
     }
@@ -353,9 +330,9 @@ public final class HostingSettingsDialog extends Dialog
         if (root == null)
             return;
         if (selectedProvider() == HostingProvider.GITHUB)
-            Program.launch(root + "/settings/tokens"); //$NON-NLS-1$
+            Program.launch(GitHubRemote.forServer(root).tokenCreationUrl(Messages.get("githubTokenDescription")));
         else
-            Program.launch(root + "/-/user_settings/personal_access_tokens"); //$NON-NLS-1$
+            Program.launch(GitLabRemote.forServer(root).tokenCreationUrl(Messages.get("gitLabTokenDescription"))); //$NON-NLS-1$
     }
 
     /** Корень сервера: страница токенов живет в корне, а не под путем проекта. */
@@ -440,20 +417,39 @@ public final class HostingSettingsDialog extends Dialog
         return tokenField.getText().trim();
     }
 
+    private record CheckResult(boolean healthy, String details) {}
+
+    private void showResult(CheckResult result)
+    {
+        resultHeading.setText(Messages.get(result.healthy() ? "hostingCheckOk" : "hostingCheckProblem"));
+        resultHeading.setForeground(resultHeading.getDisplay().getSystemColor(
+            result.healthy() ? SWT.COLOR_DARK_GREEN : SWT.COLOR_RED));
+        resultLabel.setText(result.details());
+        Shell shell = getShell();
+        shell.layout(true, true);
+        int width = shell.getSize().x;
+        int height = shell.computeSize(width, SWT.DEFAULT, true).y;
+        if (height > shell.getSize().y)
+            shell.setSize(width, height);
+    }
+
     private void checkConnection()
     {
+        long revision = ++checkRevision;
         HostingProvider provider = selectedProvider();
         String serverUrl = cleanServerUrl(serverField.getText());
         String host = serverHost(serverUrl, provider);
         if (host == null)
         {
-            resultLabel.setText(Messages.get("hostingBadAddress")); //$NON-NLS-1$
+            showResult(new CheckResult(false, Messages.get("hostingBadAddress"))); //$NON-NLS-1$
             return;
         }
         final String projectPath = projectPath(host);
         // Значения полей читаем на потоке UI: из фоновой задачи обращаться к
         // элементам SWT нельзя.
         final String token = effectiveToken();
+        final HostingSettings selectedSettings = settings;
+        resultHeading.setText("");
         resultLabel.setText(Messages.get("gitLabChecking")); //$NON-NLS-1$
         final var display = resultLabel.getDisplay();
         Job job = new Job(Messages.get("gitLabCheck")) //$NON-NLS-1$
@@ -461,7 +457,7 @@ public final class HostingSettingsDialog extends Dialog
             @Override
             protected IStatus run(IProgressMonitor monitor)
             {
-                String text;
+                CheckResult result;
                 try
                 {
                     HostingLog.write("check start: server=" + serverUrl //$NON-NLS-1$
@@ -469,34 +465,33 @@ public final class HostingSettingsDialog extends Dialog
                         + " project=" + (projectPath.isEmpty() ? "нет" : projectPath) //$NON-NLS-1$ //$NON-NLS-2$
                         + " host=" + host //$NON-NLS-1$
                         + " tokenLength=" + token.length() //$NON-NLS-1$
-                        + " certMode=" + settings.certMode()); //$NON-NLS-1$
+                        + " certMode=" + selectedSettings.certMode()); //$NON-NLS-1$
                     MergeRequestProvider client = HostingConnection.probe(serverUrl, provider,
-                        projectPath, token);
-                    text = checkText(client, provider);
+                        projectPath, token, selectedSettings);
+                    result = checkResult(client, provider);
                 }
                 catch (IllegalArgumentException e)
                 {
                     HostingLog.write("check: bad server address", e); //$NON-NLS-1$
-                    text = Messages.get("hostingBadAddress"); //$NON-NLS-1$
+                    result = new CheckResult(false, Messages.get("hostingBadAddress")); //$NON-NLS-1$
                 }
                 catch (HostingException e)
                 {
                     HostingLog.write("hosting error: " + e.kind(), e); //$NON-NLS-1$
-                    text = textFor(e, provider);
+                    result = new CheckResult(false, textFor(e, provider));
                 }
                 catch (Exception e)
                 {
                     HostingLog.write("unexpected error", e); //$NON-NLS-1$
-                    text = Messages.get("gitLabUnreachable") + " [" //$NON-NLS-1$ //$NON-NLS-2$
-                        + e.getClass().getSimpleName() + ": " + e.getMessage() + "]"; //$NON-NLS-1$ //$NON-NLS-2$
+                    result = new CheckResult(false, Messages.get("gitLabUnreachable") + " [" //$NON-NLS-1$ //$NON-NLS-2$
+                        + e.getClass().getSimpleName() + ": " + e.getMessage() + "]"); //$NON-NLS-1$ //$NON-NLS-2$
                 }
-                final String message = text;
+                final CheckResult completed = result;
                 display.asyncExec(() ->
                 {
-                    if (resultLabel.isDisposed())
+                    if (resultLabel.isDisposed() || revision != checkRevision)
                         return;
-                    resultLabel.setText(message);
-                    MessageDialog.openInformation(getShell(), Messages.get("gitLabCheck"), message); //$NON-NLS-1$
+                    showResult(completed);
                 });
                 return Status.OK_STATUS;
             }
@@ -508,12 +503,13 @@ public final class HostingSettingsDialog extends Dialog
      * Итог проверки: текущий пользователь, справочно право на создание запроса
      * и доступ к участникам. Недоступные участники проверку не отменяют.
      */
-    private static String checkText(MergeRequestProvider client, HostingProvider provider)
+    private static CheckResult checkResult(MergeRequestProvider client, HostingProvider provider)
         throws HostingException
     {
         StringBuilder text = new StringBuilder(Messages.get("gitLabConnectedAs")) //$NON-NLS-1$
             .append(' ').append(client.currentUser());
-        boolean canCreate;
+        boolean healthy = true;
+        Optional<Boolean> canCreate;
         try
         {
             canCreate = client.canCreateRequests();
@@ -523,25 +519,34 @@ public final class HostingSettingsDialog extends Dialog
             // Право на создание запроса — справочный признак: без него проверка
             // подключения все равно полезна.
             HostingLog.write("check: create permission " + e.kind(), e); //$NON-NLS-1$
-            canCreate = true;
+            healthy = false;
+            text.append(". ").append(textFor(e, provider));
+            canCreate = Optional.empty();
         }
-        if (!canCreate)
+        if (!canCreate.orElse(true))
             text.append(". ").append(Messages.get(provider == HostingProvider.GITHUB //$NON-NLS-1$
                 ? "githubNoWrite" : "gitLabTokenReadOnly")); //$NON-NLS-1$ //$NON-NLS-2$
+        healthy &= canCreate.orElse(true);
+        if (client.projectPath().isBlank())
+            return new CheckResult(healthy, text.toString());
         try
         {
             client.projectMembers();
+            if (provider == HostingProvider.GITHUB)
+                text.append(". ").append(String.format(Messages.get("githubRepositoryAccessible"), //$NON-NLS-1$ //$NON-NLS-2$
+                    client.projectPath()));
             text.append(". ").append(Messages.get("gitLabMembersAvailable")); //$NON-NLS-1$ //$NON-NLS-2$
         }
         catch (HostingException e)
         {
+            healthy = false;
             if (e.kind() == HostingException.Kind.FORBIDDEN)
                 text.append(". ").append(Messages.get(provider == HostingProvider.GITHUB //$NON-NLS-1$
                     ? "githubMembersHidden" : "gitLabHintMemberRead")); //$NON-NLS-1$ //$NON-NLS-2$
             else
-                HostingLog.write("check: project members " + e.kind(), e); //$NON-NLS-1$
+                text.append(". ").append(textFor(e, provider)); //$NON-NLS-1$
         }
-        return text.toString();
+        return new CheckResult(healthy, text.toString());
     }
 
     private static String textFor(HostingException error, HostingProvider provider)
@@ -573,7 +578,7 @@ public final class HostingSettingsDialog extends Dialog
         String host = serverHost(serverUrl, provider);
         if (host == null)
         {
-            resultLabel.setText(Messages.get("hostingBadAddress")); //$NON-NLS-1$
+            showResult(new CheckResult(false, Messages.get("hostingBadAddress"))); //$NON-NLS-1$
             return;
         }
         settings.save(serverUrl, host, provider, settings.certMode(),
@@ -588,7 +593,7 @@ public final class HostingSettingsDialog extends Dialog
             }
             catch (IllegalStateException e)
             {
-                resultLabel.setText(e.getMessage());
+                showResult(new CheckResult(false, e.getMessage()));
                 return;
             }
         }

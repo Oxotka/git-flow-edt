@@ -31,6 +31,7 @@ public final class MergeRequestErrorText
                 + "</a>"; //$NON-NLS-1$
             case FORBIDDEN -> String.format(messages.apply(client == null
                 ? "gitLabTokenReadOnly" : client.writePermissionMessageKey()), shortName); //$NON-NLS-1$
+            case NOT_FOUND -> messages.apply("mergeRequestNotFound"); //$NON-NLS-1$
             case RATE_LIMIT -> messages.apply("mergeRequestRateLimit"); //$NON-NLS-1$
             case TLS -> messages.apply("mergeRequestCertificateRejected"); //$NON-NLS-1$
             case NETWORK -> lastSuccess == null || lastSuccess.isBlank()

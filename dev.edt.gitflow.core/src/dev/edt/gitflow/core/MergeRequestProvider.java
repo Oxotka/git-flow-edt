@@ -15,6 +15,13 @@ public interface MergeRequestProvider
     /** Создает запрос на слияние. */
     MergeRequestStatus createMergeRequest(CreateMergeRequest request) throws HostingException;
 
+    record CreationResult(MergeRequestStatus status, boolean reviewerAssignmentFailed) {}
+
+    default CreationResult createWithReviewerResult(CreateMergeRequest request) throws HostingException
+    {
+        return new CreationResult(createMergeRequest(request), false);
+    }
+
     /** Участники проекта для выбора проверяющего. */
     List<ProjectMember> projectMembers() throws HostingException;
 
@@ -25,10 +32,11 @@ public interface MergeRequestProvider
     String defaultBranch() throws HostingException;
 
     /**
-     * Есть ли у токена право создавать запросы. Справочный признак: фактическое
-     * право проверяет ответ API.
+     * Есть ли у токена право создавать запросы. Пустое значение означает, что
+     * API не позволяет проверить это заранее. Даже положительный результат
+     * не отменяет проверку доступа сервером при создании.
      */
-    boolean canCreateRequests() throws HostingException;
+    Optional<Boolean> canCreateRequests() throws HostingException;
 
     /** Хост хостинга, он же ключ токена в настройках. */
     String host();

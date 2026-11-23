@@ -9,6 +9,14 @@ import dev.edt.gitflow.core.GitLabRemote;
 public class GitLabRemoteTest
 {
     @Test
+    public void prefillsTokenOnConfiguredServer()
+    {
+        var remote = GitLabRemote.forServer("https://git.example:8443");
+        assertEquals("https://git.example:8443/-/user_settings/personal_access_tokens"
+            + "?name=EDT%20Git%20Flow&scopes=api&description=MR+%26+API", remote.tokenCreationUrl("MR & API"));
+    }
+
+    @Test
     public void parsesHttpsRemote()
     {
         var remote = GitLabRemote.parse("https://akeso.dept07/BP/npo.git"); //$NON-NLS-1$

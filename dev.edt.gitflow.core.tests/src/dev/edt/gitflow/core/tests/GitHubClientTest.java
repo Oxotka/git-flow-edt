@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.After;
@@ -68,6 +69,21 @@ public class GitHubClientTest
         else
             System.setProperty(DIAGNOSTICS_PROPERTY, previousDiagnosticsFile);
         Files.deleteIfExists(diagnosticsFile);
+    }
+
+    @Test
+    public void loadsNextMemberPage() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            String path = COLLABORATORS;
+            String first = "{\"id\":1,\"login\":\"first\"}";
+            server.respond(path, 200, "[" + String.join(",", java.util.Collections.nCopies(100, first)) + "]");
+            server.respond(path + "&page=2", 200, "[{\"id\":101,\"login\":\"last\"}]");
+            var members = server.client().projectMembers();
+            assertEquals(101, members.size());
+            assertEquals("last", members.get(100).username());
+        }
     }
 
     @Test
@@ -199,22 +215,49 @@ public class GitHubClientTest
     }
 
     @Test
-    public void detectsPushPermission() throws Exception
+    public void doesNotInferTokenPermissionFromPushPermission() throws Exception
     {
         try (FakeGitHub server = new FakeGitHub())
         {
             server.respond(REPO, 200, "{\"permissions\":{\"push\":true}}"); //$NON-NLS-1$
-            assertTrue(server.client().canCreateRequests());
+            assertTrue(server.client().canCreateRequests().isEmpty());
         }
     }
 
     @Test
-    public void detectsReadOnlyPermission() throws Exception
+    public void doesNotConfirmTokenWritePermissionFromAccountRights() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            server.respond(USER, 200, "{\"login\":\"owner\"}"); //$NON-NLS-1$
+            server.respond(REPO, 200, "{\"permissions\":{\"push\":true,\"admin\":true}}"); //$NON-NLS-1$
+            server.respond(COLLABORATORS, 200, "[]"); //$NON-NLS-1$
+            assertEquals(Optional.empty(), server.client().canCreateRequests());
+        }
+    }
+
+    @Test
+    public void logsGitHubReasonForCreationDenial() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            String marker = "creation-" + UUID.randomUUID(); //$NON-NLS-1$
+            server.respond(CREATE_PULL, 403,
+                "{\"message\":\"Resource not accessible by personal access token " + marker + "\"}"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertCreateFailure(server, HostingException.Kind.FORBIDDEN);
+            String log = Files.readString(HostingDiagnostics.file());
+            assertTrue(log, log.contains(marker));
+            assertTrue(log, log.contains("403")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void doesNotInferTokenPermissionFromAccountReadAccess() throws Exception
     {
         try (FakeGitHub server = new FakeGitHub())
         {
             server.respond(REPO, 200, "{\"permissions\":{\"pull\":true}}"); //$NON-NLS-1$
-            assertFalse(server.client().canCreateRequests());
+            assertTrue(server.client().canCreateRequests().isEmpty());
         }
     }
 
@@ -224,7 +267,7 @@ public class GitHubClientTest
         try (FakeGitHub server = new FakeGitHub())
         {
             server.respond(REPO, 200, "{}"); //$NON-NLS-1$ //$NON-NLS-2$
-            assertFalse(server.client().canCreateRequests());
+            assertTrue(server.client().canCreateRequests().isEmpty());
         }
     }
 
@@ -506,6 +549,48 @@ public class GitHubClientTest
     }
 
     @Test
+    public void combinesChecksWithExternalCi() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            respondPullRequest(server, 2, OPEN_PULL);
+            server.respond(CHECKS, 200, "{\"total_count\":1,\"check_runs\":["
+                + "{\"status\":\"completed\",\"conclusion\":\"success\"}]}");
+            server.respond(STATUS, 200, "{\"state\":\"failure\",\"total_count\":1}");
+            assertEquals("failed", readStatus(server).pipelineStatus());
+            server.respond(STATUS, 200, "{\"state\":\"pending\",\"total_count\":1}");
+            assertEquals("running", readStatus(server).pipelineStatus());
+        }
+    }
+
+    @Test
+    public void readsCommitStatusesWithoutChecksPermission() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            respondPullRequest(server, 2, OPEN_PULL);
+            server.respond(CHECKS, 403, "{}");
+            server.respond(STATUS, 200, "{\"state\":\"failure\",\"total_count\":1}");
+            assertEquals("failed", readStatus(server).pipelineStatus());
+        }
+    }
+
+    @Test
+    public void readsReviewWithdrawalOnNextPage() throws Exception
+    {
+        try (FakeGitHub server = new FakeGitHub())
+        {
+            respondPullRequest(server, 2, OPEN_PULL);
+            String review = "{\"user\":{\"login\":\"ivan\"},\"state\":\"APPROVED\"}";
+            server.respond(PULL + "2/reviews?per_page=100", 200,
+                "[" + String.join(",", java.util.Collections.nCopies(100, review)) + "]");
+            server.respond(PULL + "2/reviews?per_page=100&page=2", 200,
+                "[{\"user\":{\"login\":\"ivan\"},\"state\":\"CHANGES_REQUESTED\"}]");
+            assertEquals(0, readStatus(server).approvedCount());
+        }
+    }
+
+    @Test
     public void mapsCombinedStatusStates() throws Exception
     {
         assertEquals("failed", readStatusWithCombinedStatus("failure").pipelineStatus()); //$NON-NLS-1$ //$NON-NLS-2$
@@ -601,10 +686,11 @@ public class GitHubClientTest
             server.respond(REQUESTED_REVIEWERS, 422, //$NON-NLS-1$
                 "{\"message\":\"Reviews may only be requested from collaborators. " //$NON-NLS-1$
                     + marker + "\"}"); //$NON-NLS-1$
-            MergeRequestStatus created = server.client().createMergeRequest(
+            var created = server.client().createWithReviewerResult(
                 new CreateMergeRequest("fix/1", "main", "Fix") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     .reviewer(new ProjectMember(7, null, "ivan"))); //$NON-NLS-1$
-            assertEquals(3, created.iid());
+            assertTrue(created.reviewerAssignmentFailed());
+            assertEquals(3, created.status().iid());
             assertEquals(REQUESTED_REVIEWERS, server.lastPath());
             String log = Files.readString(HostingDiagnostics.file());
             assertTrue(log, log.contains("reviewer assignment failed")); //$NON-NLS-1$
@@ -691,7 +777,7 @@ public class GitHubClientTest
         server.respond(PULL + number + "/reviews?per_page=100", 200, "[]"); //$NON-NLS-1$ //$NON-NLS-2$
         server.respond(PROTECTION, 403, "{}"); //$NON-NLS-1$ //$NON-NLS-2$
         server.respond(CHECKS, 200, "{\"total_count\":0,\"check_runs\":[]}"); //$NON-NLS-1$
-        server.respond(STATUS, 200, "{\"state\":\"success\"}"); //$NON-NLS-1$
+        server.respond(STATUS, 200, "{\"state\":\"pending\",\"total_count\":0}"); //$NON-NLS-1$
     }
 
     private static MergeRequestStatus readStatus(FakeGitHub server) throws Exception

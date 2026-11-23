@@ -89,7 +89,7 @@ public class GitLabClientTest
         {
             server.respond("/api/v4/personal_access_tokens/self", 200, //$NON-NLS-1$
                 "{\"scopes\":[\"read_api\"]}"); //$NON-NLS-1$
-            assertFalse(server.client().canCreateRequests());
+            assertFalse(server.client().canCreateRequests().orElseThrow());
         }
     }
 
@@ -100,7 +100,7 @@ public class GitLabClientTest
         {
             server.respond("/api/v4/personal_access_tokens/self", 200, //$NON-NLS-1$
                 "{\"scopes\":[\"api\",\"read_user\"]}"); //$NON-NLS-1$
-            assertTrue(server.client().canCreateRequests());
+            assertTrue(server.client().canCreateRequests().orElseThrow());
         }
     }
 

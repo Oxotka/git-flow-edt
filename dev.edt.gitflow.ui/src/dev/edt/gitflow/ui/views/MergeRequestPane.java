@@ -17,6 +17,8 @@ import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Link;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 
 import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.MergeRequestProvider;
@@ -38,15 +40,15 @@ final class MergeRequestPane
 {
     private final Composite composite;
     private final Link link;
-    private boolean refreshing;
+    private final MergeRequestRefreshSession session = new MergeRequestRefreshSession();
     private Repository repository;
     private MergeRequestProvider client;
     private String branch;
     private String defaultTargetBranch;
     private String webUrl;
-    private String lastKey = ""; //$NON-NLS-1$
     private String lastSuccessText;
     private String lastSuccessUrl;
+    private boolean creationAvailable;
 
     MergeRequestPane(Composite parent)
     {
@@ -56,14 +58,17 @@ final class MergeRequestPane
         layout.marginHeight = 0;
         composite.setLayout(layout);
         composite.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        link = new Link(composite, SWT.NONE);
+        link = new Link(composite, SWT.WRAP);
         link.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         link.addListener(SWT.Selection, event ->
         {
             if ("settings".equals(event.text)) //$NON-NLS-1$
-                HostingSettingsDialog.open(composite.getShell(), repository);
+            {
+                if (HostingSettingsDialog.open(composite.getShell(), repository))
+                    refresh(repository);
+            }
             else if ("create".equals(event.text)) //$NON-NLS-1$
-                openCreateDialog();
+                openCreateDialog(repository);
             else if (webUrl != null)
                 Program.launch(webUrl);
         });
@@ -74,33 +79,32 @@ final class MergeRequestPane
     /** Обновляет строку, только если сменился репозиторий или ветка. */
     void refreshIfChanged(Repository repository)
     {
-        String key = key(repository);
-        if (key.equals(lastKey))
-            return;
-        lastKey = key;
-        // Другая ветка или репозиторий: прежняя успешная строка к новой ветке
-        // не относится, в том числе как «последнее известное состояние».
-        lastSuccessText = null;
-        lastSuccessUrl = null;
-        refresh(repository);
+        if (!session.matches(key(repository)))
+            refresh(repository);
     }
 
     void refresh(Repository repository)
     {
-        if (refreshing)
-            return;
         if (repository == null)
         {
             hide();
             return;
         }
-        refreshing = true;
+        // Ручное обновление тоже может прийти уже для другого контекста.
+        if (session.select(key(repository)))
+        {
+            lastSuccessText = null;
+            lastSuccessUrl = null;
+            setHidden();
+        }
         this.repository = repository;
+        final long request = session.begin();
         final Repository currentRepository = repository;
         final Display display = link.getDisplay();
         final String refreshKey = key(repository);
         final String previousText = lastSuccessText;
         final String previousUrl = lastSuccessUrl;
+        final boolean previouslyCreatable = creationAvailable;
         Job job = new Job(Messages.get("mergeRequestRefreshJob")) //$NON-NLS-1$
         {
             @Override
@@ -108,7 +112,9 @@ final class MergeRequestPane
             {
                 String text;
                 String url = null;
+                boolean keepCached = false;
                 boolean success = false;
+                boolean allowCreation = false;
                 MergeRequestProvider created = null;
                 String sourceBranch = null;
                 String defaultTarget = null;
@@ -116,35 +122,25 @@ final class MergeRequestPane
                 {
                     HostingSettings settings = HostingSettings.load();
                     sourceBranch = branchName(currentRepository);
-                    if (sourceBranch == null || isIntegrationBranch(sourceBranch)
-                        || !matchesPrefix(sourceBranch, settings))
-                        return hideInBackground(display);
+                    if (sourceBranch == null || !settings.matchesBranch(sourceBranch))
+                        return hideInBackground(display, request);
                     created = HostingConnection.create(currentRepository);
                     if (created == null)
-                        return hideInBackground(display);
+                        return hideInBackground(display, request);
                     defaultTarget = defaultBranch(created);
-                    if (sourceBranch.equals(defaultTarget))
-                        return hideInBackground(display);
                     String shortName = created.requestShortName();
-                    try
+                    Optional<MergeRequestStatus> status = created.statusForBranch(sourceBranch);
+                    if (status.isPresent())
                     {
-                        Optional<MergeRequestStatus> status = created.statusForBranch(sourceBranch);
-                        if (status.isPresent())
-                        {
-                            url = status.get().webUrl();
-                            text = MergeRequestText.describeLink(status.get(), Messages::get,
-                                shortName);
-                        }
-                        else
-                            text = MergeRequestText.createLink(Messages::get, shortName);
+                        allowCreation = status.get().closedWithoutMerge();
+                        url = status.get().webUrl();
+                        text = MergeRequestText.describeLink(status.get(), Messages::get,
+                            shortName);
                     }
-                    catch (HostingException e)
+                    else
                     {
-                        // 404 проекта или запроса — это отсутствие запроса, а не сбой
-                        // связи: строка показывает ссылку создания.
-                        if (e.kind() != HostingException.Kind.NOT_FOUND)
-                            throw e;
                         text = MergeRequestText.createLink(Messages::get, shortName);
+                        allowCreation = true;
                     }
                     success = true;
                 }
@@ -154,7 +150,11 @@ final class MergeRequestPane
                     // При потере связи показываем последний успешный адрес: клик
                     // по номеру остается осмысленным.
                     if (e.kind() == HostingException.Kind.NETWORK)
+                    {
+                        keepCached = true;
                         url = previousUrl;
+                        allowCreation = previousText != null && previouslyCreatable;
+                    }
                 }
                 catch (Exception e)
                 {
@@ -164,25 +164,26 @@ final class MergeRequestPane
                 final String result = text;
                 final String address = url;
                 final boolean loaded = success;
+                final boolean preserveCache = keepCached;
                 final MergeRequestProvider readyClient = created;
                 final String readyBranch = sourceBranch;
                 final String readyTarget = defaultTarget;
+                final boolean readyToCreate = allowCreation;
                 display.asyncExec(() ->
                 {
-                    refreshing = false;
-                    if (composite.isDisposed())
+                    if (composite.isDisposed() || !session.isCurrent(request)
+                        || !refreshKey.equals(key(currentRepository)))
                         return;
-                    if (loaded && refreshKey.equals(key(currentRepository)))
+                    if (!preserveCache)
                     {
-                        // Задача могла завершиться уже после смены ветки: чужую
-                        // успешную строку в «последнее известное» не пишем.
-                        lastSuccessText = result;
-                        lastSuccessUrl = address;
+                        lastSuccessText = loaded ? result : null;
+                        lastSuccessUrl = loaded ? address : null;
                     }
                     webUrl = address;
                     client = readyClient;
                     branch = readyBranch;
                     defaultTargetBranch = readyTarget;
+                    creationAvailable = readyToCreate;
                     link.setText(result);
                     composite.setVisible(true);
                     excludeRow(false);
@@ -195,30 +196,65 @@ final class MergeRequestPane
         job.schedule();
     }
 
-    private void openCreateDialog()
+    void addCreateAction(Menu menu, Repository selected, boolean enabled)
     {
-        if (repository == null || client == null || branch == null)
+        if (!canCreate(selected))
+            return;
+        MenuItem item = new MenuItem(menu, SWT.PUSH);
+        item.setText(String.format(Messages.get("mergeRequestCreate"), client.requestShortName()) + "…"); //$NON-NLS-1$ //$NON-NLS-2$
+        item.setEnabled(enabled);
+        item.addListener(SWT.Selection, event -> openCreateDialog(selected));
+    }
+
+    private boolean canCreate(Repository selected)
+    {
+        return creationAvailable && client != null && branch != null && repository != null
+            && selected != null && repository.getDirectory().equals(selected.getDirectory())
+            && branch.equals(branchName(selected));
+    }
+
+    private void openCreateDialog(Repository selected)
+    {
+        if (!canCreate(selected))
             return;
         MergeRequestStatus created = MergeRequestCreateDialog.open(composite.getShell(), client,
-            branch, lastCommitSubject(repository),
-            targetBranches(repository, defaultTargetBranch));
+            branch, lastCommitSubject(selected),
+            targetBranches(selected, defaultTargetBranch));
         if (created != null)
-            refresh(repository);
+        {
+            refresh(selected);
+            String url = created.webUrl();
+            if (url != null && (url.startsWith("https://") || url.startsWith("http://"))) //$NON-NLS-1$ //$NON-NLS-2$
+                Program.launch(url);
+        }
     }
 
     /** Скрывает строку и завершает фоновую задачу. */
-    private IStatus hideInBackground(Display display)
+    private IStatus hideInBackground(Display display, long request)
     {
         display.asyncExec(() ->
         {
-            refreshing = false;
-            hide();
+            if (session.isCurrent(request))
+                setHidden();
         });
         return Status.OK_STATUS;
     }
 
     void hide()
     {
+        session.clear();
+        repository = null;
+        lastSuccessText = null;
+        lastSuccessUrl = null;
+        setHidden();
+    }
+
+    private void setHidden()
+    {
+        client = null;
+        creationAvailable = false;
+        branch = null;
+        webUrl = null;
         if (composite.isDisposed())
             return;
         composite.setVisible(false);
@@ -294,22 +330,9 @@ final class MergeRequestPane
         }
     }
 
-    /** Ветки, для которых предлагается merge request. */
-    private static boolean matchesPrefix(String branch, HostingSettings settings)
-    {
-        for (String prefix : settings.branchPrefixes())
-        {
-            String clean = prefix.trim();
-            if (!clean.isEmpty() && branch.startsWith(clean))
-                return true;
-        }
-        return false;
-    }
-
     /**
      * Целевые ветки: ветка по умолчанию у провайдера, затем все ветки origin без
-     * служебного HEAD. Интеграционные ветки не исключаются: скрытие строки на
-     * текущей ветке — отдельное правило и на список целей не влияет.
+     * служебного HEAD.
      */
     private static java.util.List<String> targetBranches(Repository repository,
         String defaultBranch)
@@ -332,10 +355,5 @@ final class MergeRequestPane
             // Без удаленных веток останется только ветка по умолчанию.
         }
         return new java.util.ArrayList<>(result);
-    }
-
-    private static boolean isIntegrationBranch(String branch)
-    {
-        return "master".equals(branch) || "main".equals(branch) || "develop".equals(branch); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 }

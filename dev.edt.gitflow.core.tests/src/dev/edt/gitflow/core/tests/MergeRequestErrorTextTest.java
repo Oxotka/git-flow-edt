@@ -56,6 +56,12 @@ public class MergeRequestErrorTextTest
     }
 
     @Test
+    public void missingResourceReplacesCachedCreateLink()
+    {
+        assertEquals("mergeRequestNotFound", describe(HostingException.Kind.NOT_FOUND, github(), "<a>Создать PR</a>"));
+    }
+
+    @Test
     public void explainsAuthorizationAndPermission()
     {
         assertEquals("Токен не принят · <a href=\"settings\">Настроить хостинг…</a>", //$NON-NLS-1$

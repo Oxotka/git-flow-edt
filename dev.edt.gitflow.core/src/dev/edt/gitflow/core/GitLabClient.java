@@ -124,9 +124,9 @@ public final class GitLabClient implements MergeRequestProvider
     }
 
     @Override
-    public boolean canCreateRequests() throws HostingException
+    public Optional<Boolean> canCreateRequests() throws HostingException
     {
-        return tokenScopes().contains("api"); //$NON-NLS-1$
+        return Optional.of(tokenScopes().contains("api")); //$NON-NLS-1$
     }
 
     public List<String> tokenScopes() throws HostingException
@@ -223,13 +223,19 @@ public final class GitLabClient implements MergeRequestProvider
     public List<ProjectMember> projectMembers() throws HostingException
     {
         String path = "projects/" + encode(remote.projectPath()) + "/members/all?per_page=100"; //$NON-NLS-1$ //$NON-NLS-2$
-        JsonArray members = JsonParser.parseString(send(request(path))).getAsJsonArray();
         List<ProjectMember> result = new ArrayList<>();
-        for (JsonElement element : members)
+        for (int page = 1; ; page++)
         {
-            JsonObject member = element.getAsJsonObject();
-            result.add(new ProjectMember(member.get("id").getAsInt(), string(member, "name"), //$NON-NLS-1$ //$NON-NLS-2$
-                string(member, "username"))); //$NON-NLS-1$
+            String url = page == 1 ? path : path + "&page=" + page; //$NON-NLS-1$
+            JsonArray members = JsonParser.parseString(send(request(url))).getAsJsonArray();
+            for (JsonElement element : members)
+            {
+                JsonObject member = element.getAsJsonObject();
+                result.add(new ProjectMember(member.get("id").getAsInt(), string(member, "name"), //$NON-NLS-1$ //$NON-NLS-2$
+                    string(member, "username"))); //$NON-NLS-1$
+            }
+            if (members.size() < 100)
+                break;
         }
         return result;
     }

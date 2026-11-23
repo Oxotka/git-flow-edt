@@ -72,6 +72,8 @@ public final class MergeRequestText
             parts.add(messages.apply("mergeRequestDiscussions")); //$NON-NLS-1$
         if ("opened".equals(status.state()) && !status.draft() && "mergeable".equals(status.mergeStatus())) //$NON-NLS-1$ //$NON-NLS-2$
             parts.add(messages.apply("mergeRequestReadyToMerge")); //$NON-NLS-1$
+        if (links && status.closedWithoutMerge())
+            parts.add("<a href=\"create\">" + String.format(messages.apply("mergeRequestCreateNew"), shortName) + "</a>");
         return String.join(" · ", parts); //$NON-NLS-1$
     }
 

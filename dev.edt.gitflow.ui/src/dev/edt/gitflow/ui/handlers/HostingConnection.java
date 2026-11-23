@@ -10,6 +10,7 @@ import dev.edt.gitflow.core.GitHubClient;
 import dev.edt.gitflow.core.GitHubRemote;
 import dev.edt.gitflow.core.GitLabClient;
 import dev.edt.gitflow.core.GitLabRemote;
+import dev.edt.gitflow.core.HostingException;
 import dev.edt.gitflow.core.HostingProvider;
 import dev.edt.gitflow.core.MergeRequestProvider;
 
@@ -74,12 +75,13 @@ public final class HostingConnection
      * Клиент по значениям формы настроек, без репозитория: адрес сервера и путь
      * проекта приходят из полей. Нужен для проверки подключения из формы.
      * Если путь проекта не задан, клиент строится для корня сервера.
+     * Сертификат берется из переданного снимка формы, даже если он еще не сохранен.
      *
      * @throws IllegalArgumentException если адрес сервера не разобран: это ошибка
      *             в форме, а не сбой хостинга
      */
     public static MergeRequestProvider probe(String serverUrl, HostingProvider provider,
-        String projectPath, String token)
+        String projectPath, String token, HostingSettings settings) throws HostingException
     {
         String base = serverUrl == null ? "" : serverUrl.trim(); //$NON-NLS-1$
         while (base.endsWith("/")) //$NON-NLS-1$
@@ -93,11 +95,11 @@ public final class HostingConnection
         {
             GitHubRemote remote = path.isEmpty() ? GitHubRemote.forServer(base)
                 : GitHubRemote.parse(base + "/" + path); //$NON-NLS-1$
-            return new GitHubClient(remote, readyToken, context(), TIMEOUT);
+            return new GitHubClient(remote, readyToken, context(settings), TIMEOUT);
         }
         GitLabRemote remote = path.isEmpty() ? GitLabRemote.forServer(base)
             : GitLabRemote.parse(base + "/" + path); //$NON-NLS-1$
-        return new GitLabClient(remote, readyToken, context(), TIMEOUT);
+        return new GitLabClient(remote, readyToken, context(settings), TIMEOUT);
     }
 
     /**
@@ -135,18 +137,19 @@ public final class HostingConnection
     }
 
     /**
-     * Контекст сертификатов из сохраненных настроек. Если его не собрать, остается
-     * стандартное доверие JVM: проверка подключения покажет ошибку TLS сама.
+     * Ошибка выбранного файла должна быть видна при проверке, без подмены
+     * сертификата стандартным доверием JVM.
      */
-    private static SSLContext context()
+    private static SSLContext context(HostingSettings settings) throws HostingException
     {
         try
         {
-            return HostingSsl.context(HostingSettings.load());
+            return HostingSsl.context(settings);
         }
         catch (Exception e)
         {
-            return null;
+            throw new HostingException(HostingException.Kind.TLS,
+                "Не удалось загрузить сертификат сервера", e); //$NON-NLS-1$
         }
     }
 }

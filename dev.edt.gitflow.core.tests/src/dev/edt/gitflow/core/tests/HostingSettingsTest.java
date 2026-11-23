@@ -155,8 +155,6 @@ public class HostingSettingsTest
     @Test
     public void doesNotRestoreLegacyBranchPrefixesAfterClearing()
     {
-        // Пользователь очистил поле: должны вернуться значения по умолчанию,
-        // а не прежние префиксы GitLab.
         Preferences hosting = preferences("hosting"); //$NON-NLS-1$
         Preferences legacy = preferences("gitlab"); //$NON-NLS-1$
         String oldHosting = hosting.get("branchPrefixes", null); //$NON-NLS-1$
@@ -167,7 +165,13 @@ public class HostingSettingsTest
         {
             var settings = HostingSettings.forTesting("https://akeso.dept07", //$NON-NLS-1$
                 "akeso.dept07", HostingProvider.GITLAB); //$NON-NLS-1$
-            assertEquals(HostingSettings.defaultBranchPrefixes(), settings.branchPrefixes());
+            assertTrue(settings.branchPrefixes().isEmpty());
+            assertTrue(settings.matchesBranch("main"));
+            hosting.put("branchPrefixes", "*");
+            assertTrue(settings.matchesBranch("release/next"));
+            hosting.put("branchPrefixes", "fix/, feat/");
+            assertTrue(settings.matchesBranch("feat/example"));
+            assertFalse(settings.matchesBranch("release/next"));
         }
         finally
         {

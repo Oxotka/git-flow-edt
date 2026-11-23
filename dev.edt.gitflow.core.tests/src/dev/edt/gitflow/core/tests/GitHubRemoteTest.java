@@ -44,4 +44,20 @@ public class GitHubRemoteTest
         assertEquals("ghe.corp", remote.host()); //$NON-NLS-1$
         assertEquals("https://ghe.corp/api/v3", remote.apiBase()); //$NON-NLS-1$
     }
+
+    @Test
+    public void opensFineGrainedTokenFormWithPullRequestWritePermission()
+    {
+        var remote = GitHubRemote.parse("git@github.com:owner/repo.git"); //$NON-NLS-1$
+        assertEquals("https://github.com/settings/personal-access-tokens/new"
+            + "?name=EDT%20Git%20Flow&expires_in=365&contents=read&pull_requests=write&description=PR+%26+API", remote.tokenCreationUrl("PR & API")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void tokenFormStaysOnEnterpriseHostAndWebPort()
+    {
+        var remote = GitHubRemote.forServer("https://ghe.corp:8443/"); //$NON-NLS-1$
+        assertEquals("https://ghe.corp:8443/settings/personal-access-tokens/new"
+            + "?name=EDT%20Git%20Flow&expires_in=365&contents=read&pull_requests=write&description=PR+%26+API", remote.tokenCreationUrl("PR & API")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

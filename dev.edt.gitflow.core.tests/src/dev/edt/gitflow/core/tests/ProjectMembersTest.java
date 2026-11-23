@@ -11,6 +11,21 @@ import dev.edt.gitflow.core.ProjectMember;
 public class ProjectMembersTest
 {
     @Test
+    public void loadsNextMemberPage() throws Exception
+    {
+        try (FakeGitLab server = new FakeGitLab())
+        {
+            String path = "/api/v4/projects/group%2Fproject/members/all?per_page=100";
+            String first = "{\"id\":1,\"username\":\"first\"}";
+            server.respond(path, 200, "[" + String.join(",", java.util.Collections.nCopies(100, first)) + "]");
+            server.respond(path + "&page=2", 200, "[{\"id\":101,\"username\":\"last\"}]");
+            var members = server.client().projectMembers();
+            assertEquals(101, members.size());
+            assertEquals("last", members.get(100).username());
+        }
+    }
+
+    @Test
     public void readsProjectMembers() throws Exception
     {
         try (FakeGitLab server = new FakeGitLab())

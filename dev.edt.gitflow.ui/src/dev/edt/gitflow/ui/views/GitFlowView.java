@@ -506,8 +506,6 @@ public class GitFlowView extends ViewPart
         repositoryCombo = new Combo(parent, SWT.DROP_DOWN | SWT.READ_ONLY);
         repositoryCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         repositoryCombo.addListener(SWT.Selection, event -> selectRepository(selectedRepository()));
-        mergeRequestPane = new MergeRequestPane(parent);
-        syncButton.addListener(SWT.Selection, event -> mergeRequestPane.refresh(selectedRepository()));
 
         SashForm messageSplit = new SashForm(parent, SWT.VERTICAL);
         messageSplit.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -639,7 +637,15 @@ public class GitFlowView extends ViewPart
         content.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         content.setSashWidth(4);
         changesTree = changeTree(content);
-        historyPane = new RecentHistoryPane(content);
+        Composite historyArea = new Composite(content, SWT.NONE);
+        GridLayout historyLayout = new GridLayout(1, false);
+        historyLayout.marginWidth = 0;
+        historyLayout.marginHeight = 0;
+        historyArea.setLayout(historyLayout);
+        mergeRequestPane = new MergeRequestPane(historyArea);
+        syncButton.addListener(SWT.Selection, event -> mergeRequestPane.refresh(selectedRepository()));
+        historyPane = new RecentHistoryPane(historyArea);
+        historyPane.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         historyPane.setMenuProvider(this::historyMenu);
         historyPane.setSearchActions(this::startHistorySearch, this::nextHistoryMatch,
             this::historySearchQueryChanged);
@@ -1088,9 +1094,12 @@ public class GitFlowView extends ViewPart
         });
         new MenuItem(menu, SWT.SEPARATOR);
         MenuItem hosting = new MenuItem(menu, SWT.PUSH);
-        hosting.setText(Messages.get("hostingSettings")); //$NON-NLS-1$
-        hosting.addListener(SWT.Selection,
-            event -> HostingSettingsDialog.open(getSite().getShell(), selectedRepository()));
+        hosting.setText(HostingSettingsDialog.menuTitle(selectedRepository()));
+        hosting.addListener(SWT.Selection, event ->
+        {
+            if (HostingSettingsDialog.open(getSite().getShell(), selectedRepository()))
+                mergeRequestPane.refresh(selectedRepository());
+        });
         menu.addListener(SWT.Hide, event -> anchor.getDisplay().asyncExec(menu::dispose));
         menu.setLocation(anchor.toDisplay(0, anchor.getSize().y));
         menu.setVisible(true);
@@ -1245,6 +1254,7 @@ public class GitFlowView extends ViewPart
         {
             historyItem(menu, Messages.get("mergeBranch"), () -> mergeBranch(repository)) //$NON-NLS-1$
                 .setEnabled(!isRunning(repository));
+            mergeRequestPane.addCreateAction(menu, repository, !isRunning(repository));
             new MenuItem(menu, SWT.SEPARATOR);
         }
         String upstream = upstream(repository);

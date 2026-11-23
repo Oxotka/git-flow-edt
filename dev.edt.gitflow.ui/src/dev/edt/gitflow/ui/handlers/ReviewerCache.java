@@ -2,6 +2,7 @@ package dev.edt.gitflow.ui.handlers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.osgi.service.prefs.BackingStoreException;
@@ -10,7 +11,7 @@ import org.osgi.service.prefs.Preferences;
 import dev.edt.gitflow.core.ProjectMember;
 
 /**
- * Последние выбранные проверяющие по проекту. Команды повторяются, поэтому
+ * Последние выбранные проверяющие по хосту и проекту. Команды повторяются, поэтому
  * прошлые выборы показываются первыми и фильтруются быстрее, чем полный список
  * участников.
  */
@@ -18,25 +19,20 @@ public final class ReviewerCache
 {
     private static final String PLUGIN_ID = "dev.edt.gitflow.ui"; //$NON-NLS-1$
     private static final String NODE = "hosting"; //$NON-NLS-1$
-    private static final String LEGACY_NODE = "gitlab"; //$NON-NLS-1$
-    private static final String PREFIX = "reviewers."; //$NON-NLS-1$
+    private static final String PREFIX = "reviewersByHost."; //$NON-NLS-1$
     private static final int LIMIT = 8;
 
     private ReviewerCache()
     {
     }
 
-    public static List<ProjectMember> recent(String projectPath)
+    public static List<ProjectMember> recent(String host, String projectPath)
     {
         List<ProjectMember> result = new ArrayList<>();
-        if (projectPath == null || projectPath.isBlank())
+        if (host == null || host.isBlank() || projectPath == null || projectPath.isBlank())
             return result;
-        String stored = node().get(PREFIX + projectPath, ""); //$NON-NLS-1$
-        if (stored.isEmpty())
-        {
-            // Кеш, сохраненный прежней версией плагина для GitLab.
-            stored = legacyNode().get(PREFIX + projectPath, ""); //$NON-NLS-1$
-        }
+        // Старые записи без хоста нельзя безопасно отнести к конкретному серверу.
+        String stored = node().get(key(host, projectPath), ""); //$NON-NLS-1$
         for (String entry : stored.split(";")) //$NON-NLS-1$
         {
             String[] parts = entry.split("\\|"); //$NON-NLS-1$
@@ -55,11 +51,11 @@ public final class ReviewerCache
         return result;
     }
 
-    public static void remember(String projectPath, ProjectMember member)
+    public static void remember(String host, String projectPath, ProjectMember member)
     {
-        if (projectPath == null || projectPath.isBlank() || member == null)
+        if (host == null || host.isBlank() || projectPath == null || projectPath.isBlank() || member == null)
             return;
-        List<ProjectMember> all = recent(projectPath);
+        List<ProjectMember> all = recent(host, projectPath);
         all.removeIf(existing -> existing.id() == member.id());
         all.add(0, member);
         while (all.size() > LIMIT)
@@ -73,7 +69,7 @@ public final class ReviewerCache
                 .append(item.username());
         }
         Preferences node = node();
-        node.put(PREFIX + projectPath, stored.toString());
+        node.put(key(host, projectPath), stored.toString());
         try
         {
             node.flush();
@@ -89,8 +85,8 @@ public final class ReviewerCache
         return InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(NODE);
     }
 
-    private static Preferences legacyNode()
+    private static String key(String host, String projectPath)
     {
-        return InstanceScope.INSTANCE.getNode(PLUGIN_ID).node(LEGACY_NODE);
+        return PREFIX + host.trim().toLowerCase(Locale.ROOT) + "/" + projectPath; //$NON-NLS-1$
     }
 }

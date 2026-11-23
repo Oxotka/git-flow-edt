@@ -76,6 +76,11 @@ public final class MergeRequestStatus
         return state;
     }
 
+    public boolean closedWithoutMerge()
+    {
+        return "closed".equals(state) && (mergedAt == null || mergedAt.isBlank()); //$NON-NLS-1$
+    }
+
     public boolean draft()
     {
         return draft;

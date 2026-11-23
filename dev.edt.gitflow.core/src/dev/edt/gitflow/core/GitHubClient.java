@@ -155,12 +155,11 @@ public final class GitHubClient implements MergeRequestProvider
     }
 
     @Override
-    public boolean canCreateRequests() throws HostingException
+    public Optional<Boolean> canCreateRequests() throws HostingException
     {
-        JsonObject project = getObject(repoPath());
-        if (!project.has("permissions") || !project.get("permissions").isJsonObject()) //$NON-NLS-1$ //$NON-NLS-2$
-            return false;
-        return booleanValue(project.getAsJsonObject("permissions"), "push"); //$NON-NLS-1$ //$NON-NLS-2$
+        // permissions.push описывает права пользователя, а не разрешения
+        // fine-grained токена. Без создания PR подтвердить запись нельзя.
+        return Optional.empty();
     }
 
     /**
@@ -170,14 +169,20 @@ public final class GitHubClient implements MergeRequestProvider
     @Override
     public List<ProjectMember> projectMembers() throws HostingException
     {
-        JsonArray members = JsonParser.parseString(send(request(
-            repoPath() + "/collaborators?per_page=100"))).getAsJsonArray(); //$NON-NLS-1$
+        String path = repoPath() + "/collaborators?per_page=100"; //$NON-NLS-1$
         List<ProjectMember> result = new ArrayList<>();
-        for (JsonElement element : members)
+        for (int page = 1; ; page++)
         {
-            JsonObject member = element.getAsJsonObject();
-            result.add(new ProjectMember(member.get("id").getAsInt(), null, //$NON-NLS-1$
-                string(member, "login"))); //$NON-NLS-1$
+            String url = page == 1 ? path : path + "&page=" + page; //$NON-NLS-1$
+            JsonArray members = JsonParser.parseString(send(request(url))).getAsJsonArray();
+            for (JsonElement element : members)
+            {
+                JsonObject member = element.getAsJsonObject();
+                result.add(new ProjectMember(member.get("id").getAsInt(), null, //$NON-NLS-1$
+                    string(member, "login"))); //$NON-NLS-1$
+            }
+            if (members.size() < 100)
+                break;
         }
         return result;
     }
@@ -210,8 +215,7 @@ public final class GitHubClient implements MergeRequestProvider
         // В списке нет mergeable, проверок и сведений о слиянии: они приходят
         // только в деталях pull request.
         JsonObject pull = getObject(repoPath() + "/pulls/" + number); //$NON-NLS-1$
-        JsonArray reviews = JsonParser.parseString(send(request(
-            repoPath() + "/pulls/" + number + "/reviews?per_page=100"))).getAsJsonArray(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonArray reviews = reviews(number);
         int required = 0;
         boolean approvalsRequiredKnown = false;
         String base = baseRef(pull);
@@ -248,26 +252,39 @@ public final class GitHubClient implements MergeRequestProvider
     @Override
     public MergeRequestStatus createMergeRequest(CreateMergeRequest request) throws HostingException
     {
+        return createWithReviewerResult(request).status();
+    }
+
+    @Override
+    public CreationResult createWithReviewerResult(CreateMergeRequest request) throws HostingException
+    {
         HttpResponse<String> response = exchange(post(repoPath() + "/pulls", createPayload(request))); //$NON-NLS-1$
         if (!isSuccess(response.statusCode()))
-            throw creationFailure(response);
+        {
+            HostingException error = creationFailure(response);
+            HostingDiagnostics.write("pull request creation failed: " + error.kind() //$NON-NLS-1$
+                + ": " + error.getMessage(), error); //$NON-NLS-1$
+            throw error;
+        }
         JsonObject created = JsonParser.parseString(response.body()).getAsJsonObject();
         int number = created.get("number").getAsInt(); //$NON-NLS-1$
         ProjectMember reviewer = request.reviewer();
+        boolean assignmentFailed = false;
         if (reviewer != null)
         {
             if (reviewer.username() == null || reviewer.username().isBlank())
             {
                 // Логин неизвестен: назначить проверяющего нечем, но запрос уже
                 // создан и должен вернуться вызывающему.
+                assignmentFailed = true;
                 HostingDiagnostics.write("reviewer assignment skipped: empty username"); //$NON-NLS-1$
             }
             else
             {
-                requestReviewer(number, reviewer);
+                assignmentFailed = !requestReviewer(number, reviewer);
             }
         }
-        return createdStatus(created);
+        return new CreationResult(createdStatus(created), assignmentFailed);
     }
 
     private JsonObject createPayload(CreateMergeRequest request)
@@ -282,7 +299,7 @@ public final class GitHubClient implements MergeRequestProvider
         return json;
     }
 
-    private void requestReviewer(int number, ProjectMember reviewer)
+    private boolean requestReviewer(int number, ProjectMember reviewer)
     {
         JsonObject payload = new JsonObject();
         JsonArray reviewers = new JsonArray();
@@ -291,6 +308,7 @@ public final class GitHubClient implements MergeRequestProvider
         try
         {
             send(post(repoPath() + "/pulls/" + number + "/requested_reviewers", payload)); //$NON-NLS-1$ //$NON-NLS-2$
+            return true;
         }
         catch (HostingException e)
         {
@@ -298,6 +316,7 @@ public final class GitHubClient implements MergeRequestProvider
             // Причину пишем в диагностический журнал, иначе она теряется.
             HostingDiagnostics.write("reviewer assignment failed: " + e.kind() //$NON-NLS-1$
                 + ": " + e.getMessage(), e); //$NON-NLS-1$
+            return false;
         }
     }
 
@@ -416,41 +435,60 @@ public final class GitHubClient implements MergeRequestProvider
         return approved;
     }
 
+    private JsonArray reviews(int number) throws HostingException
+    {
+        JsonArray result = new JsonArray();
+        String path = repoPath() + "/pulls/" + number + "/reviews?per_page=100"; //$NON-NLS-1$ //$NON-NLS-2$
+        for (int page = 1; ; page++)
+        {
+            JsonArray batch = JsonParser.parseString(send(request(path
+                + (page == 1 ? "" : "&page=" + page)))).getAsJsonArray(); //$NON-NLS-1$ //$NON-NLS-2$
+            result.addAll(batch);
+            if (batch.size() < 100)
+                return result;
+        }
+    }
+
     /**
-     * Итог проверок коммита: check-runs, а при их отсутствии — combined status.
+     * Итог проверок коммита: check-runs вместе с combined status внешнего CI.
      * Недоступные проверки не скрывают строку, а оставляют статус пустым.
      */
     private String pipelineStatus(String sha) throws HostingException
     {
         if (sha == null)
             return null;
-        JsonObject runs;
+        String checks = null;
         try
         {
-            runs = getObject(repoPath() + "/commits/" + encode(sha) + "/check-runs?per_page=100"); //$NON-NLS-1$ //$NON-NLS-2$
+            JsonObject runs = getObject(repoPath() + "/commits/" + encode(sha) + "/check-runs?per_page=100"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (runs.has("total_count") && runs.get("total_count").getAsInt() > 0) //$NON-NLS-1$ //$NON-NLS-2$
+                checks = checkRunsStatus(runs.has("check_runs") //$NON-NLS-1$
+                    ? runs.getAsJsonArray("check_runs") : new JsonArray()); //$NON-NLS-1$
         }
         catch (HostingException e)
         {
-            if (e.kind() == HostingException.Kind.FORBIDDEN
-                || e.kind() == HostingException.Kind.NOT_FOUND)
-                return null;
-            throw e;
+            if (e.kind() != HostingException.Kind.FORBIDDEN
+                && e.kind() != HostingException.Kind.NOT_FOUND)
+                throw e;
         }
-        if (runs.has("total_count") && runs.get("total_count").getAsInt() > 0) //$NON-NLS-1$ //$NON-NLS-2$
-            return checkRunsStatus(runs.has("check_runs") //$NON-NLS-1$
-                ? runs.getAsJsonArray("check_runs") : new JsonArray()); //$NON-NLS-1$
+        String statuses = null;
         try
         {
-            return combinedStatus(string(getObject(
-                repoPath() + "/commits/" + encode(sha) + "/status"), "state")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            JsonObject combined = getObject(repoPath() + "/commits/" + encode(sha) + "/status"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!combined.has("total_count") || combined.get("total_count").getAsInt() > 0) //$NON-NLS-1$ //$NON-NLS-2$
+                statuses = combinedStatus(string(combined, "state")); //$NON-NLS-1$
         }
         catch (HostingException e)
         {
-            if (e.kind() == HostingException.Kind.FORBIDDEN
-                || e.kind() == HostingException.Kind.NOT_FOUND)
-                return null;
-            throw e;
+            if (e.kind() != HostingException.Kind.FORBIDDEN
+                && e.kind() != HostingException.Kind.NOT_FOUND)
+                throw e;
         }
+        if ("failed".equals(checks) || "failed".equals(statuses)) //$NON-NLS-1$ //$NON-NLS-2$
+            return "failed"; //$NON-NLS-1$
+        if ("running".equals(checks) || "running".equals(statuses)) //$NON-NLS-1$ //$NON-NLS-2$
+            return "running"; //$NON-NLS-1$
+        return checks == null ? statuses : checks;
     }
 
     private static String checkRunsStatus(JsonArray runs)

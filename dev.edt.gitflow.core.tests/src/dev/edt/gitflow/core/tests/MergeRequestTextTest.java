@@ -26,6 +26,7 @@ public class MergeRequestTextTest
             case "mergeRequestDiscussions" -> "Есть незакрытые обсуждения"; //$NON-NLS-1$ //$NON-NLS-2$
             case "mergeRequestReadyToMerge" -> "Готов к слиянию"; //$NON-NLS-1$ //$NON-NLS-2$
             case "mergeRequestCreateLink" -> "Создать %s"; //$NON-NLS-1$
+            case "mergeRequestCreateNew" -> "Создать новый %s";
             default -> key;
         };
     }
@@ -35,6 +36,21 @@ public class MergeRequestTextTest
     {
         return new MergeRequestStatus(7, "Fix", state, draft, "url", approved, required, //$NON-NLS-1$ //$NON-NLS-2$
             pipeline, conflicts, discussionsResolved, 0, null);
+    }
+
+    @Test
+    public void offersAnotherRequestOnlyAfterClosingWithoutMerge()
+    {
+        for (String name : new String[] {"MR", "PR"})
+        {
+            var closed = status("closed", false, 0, 0, null, false, true);
+            assertEquals("<a href=\"open\">" + name + "-7</a> · Закрыт · <a href=\"create\">Создать новый "
+                + name + "</a>", MergeRequestText.describeLink(closed, MergeRequestTextTest::message, name));
+            for (String state : new String[] {"opened", "merged"})
+                org.junit.Assert.assertFalse(MergeRequestText.describeLink(
+                    status(state, false, 0, 0, null, false, true), MergeRequestTextTest::message, name)
+                    .contains("href=\"create\""));
+        }
     }
 
     @Test

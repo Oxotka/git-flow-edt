@@ -148,9 +148,7 @@ public final class HostingSettings
         String stored = hostingNode().get(BRANCH_PREFIXES, null);
         if (stored == null)
             stored = legacyNode().get(BRANCH_PREFIXES, null);
-        // Сохраненное пустое значение означает очистку поля: значения по умолчанию,
-        // а не прежние префиксы GitLab.
-        if (stored == null || stored.isBlank())
+        if (stored == null)
             return defaultBranchPrefixes();
         List<String> result = new ArrayList<>();
         for (String part : stored.split(",")) //$NON-NLS-1$
@@ -159,7 +157,13 @@ public final class HostingSettings
             if (!prefix.isEmpty())
                 result.add(prefix);
         }
-        return result.isEmpty() ? defaultBranchPrefixes() : result;
+        return result;
+    }
+
+    public boolean matchesBranch(String branch)
+    {
+        List<String> prefixes = branchPrefixes();
+        return prefixes.isEmpty() || prefixes.contains("*") || prefixes.stream().anyMatch(branch::startsWith); //$NON-NLS-1$
     }
 
     public void saveBranchPrefixes(String prefixes)
