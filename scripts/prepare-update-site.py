@@ -34,5 +34,7 @@ with zipfile.ZipFile(args.archive) as archive:
 html = (root / 'website/index.html').read_text().replace('__VERSION__', version)
 (args.destination / 'index.html').write_text(html)
 shutil.copyfile(root / 'docs/images/git-flow-edt.jpg', args.destination / 'screenshot.jpg')
+shutil.copyfile(root / 'docs/images/git-flow-edt-under-navigator.jpg',
+                args.destination / 'screenshot-under-navigator.jpg')
 (args.destination / '.nojekyll').touch()
 print(f'Prepared Git Flow {version}: {args.destination}')

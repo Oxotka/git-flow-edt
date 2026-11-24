@@ -8,6 +8,9 @@
   <style>
     :root{color-scheme:light;--ink:#20262d;--muted:#59636d;--accent:#b33d18;--line:#dedbd5;--paper:#faf8f3}
     *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1040px;margin:auto;padding:36px 28px 64px}a{color:var(--accent);text-underline-offset:4px}a:hover{text-decoration-thickness:2px}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:4px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-bottom:22px;border-bottom:1px solid var(--line)}.brand{font-weight:700;letter-spacing:-.04em;font-size:26px;color:var(--ink);text-decoration:none}nav{display:flex;gap:22px;flex-wrap:wrap;font-size:15px}h2{font-size:27px;letter-spacing:-.025em;line-height:1.25;margin:0 0 22px}.install{border-top:3px solid var(--accent);padding-top:26px}.version{color:var(--muted);font-size:14px;margin:0 0 12px}.url{display:flex;gap:10px;margin:16px 0 26px}input{min-width:0;width:100%;border:1px solid var(--line);background:white;color:var(--ink);padding:17px;font:15px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;border-radius:4px}button{background:var(--ink);color:white;border:0;padding:14px 22px;font-family:inherit;font-size:15px;font-weight:600;line-height:1.3;border-radius:4px;cursor:pointer;white-space:nowrap}button:hover{background:var(--accent)}.steps{padding-left:25px;max-width:720px}.steps li{padding:0 0 15px 8px}.steps li::marker{color:var(--accent);font-weight:700}.steps strong{font-weight:650}.columns{display:grid;grid-template-columns:1fr 1fr;gap:48px;border-top:1px solid var(--line);padding-top:32px;margin-top:32px}.columns p{margin:0;max-width:460px}figure{margin:48px 0 0}figure img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:6px}figcaption{font-size:14px;color:var(--muted);margin-top:10px}footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--line);display:flex;gap:22px;flex-wrap:wrap;font-size:14px}#copy-status{font-size:14px;color:var(--muted);min-height:22px;margin-top:-18px}.note{font-size:15px;color:var(--muted)}@media(max-width:620px){main{padding:24px 20px 40px}header{align-items:flex-start;flex-direction:column}.url{flex-direction:column}button{align-self:flex-start}.columns{grid-template-columns:1fr;gap:30px}input{font-size:12px;padding:14px}}
+    .screenshots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:48px}
+    .screenshots figure{margin:0}
+    @media(max-width:620px){.screenshots{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -31,7 +34,10 @@
     <section aria-labelledby="update-title"><h2 id="update-title">Обновить плагин</h2><p>Откройте <strong>Справка → Проверить обновления</strong>. EDT проверит добавленный сайт и предложит новую версию Git Flow</p><p class="note">Уже установили из ZIP? Добавьте эту ссылку в доступные сайты ПО в настройках EDT, затем проверьте обновления</p></section>
     <section aria-labelledby="zip-title"><h2 id="zip-title">Установить из архива</h2><p>Скачайте ZIP из <a href="https://github.com/Oxotka/git-flow-edt/releases/latest">последнего релиза</a>. В окне установки выберите <strong>Добавить… → Архив…</strong> и укажите файл</p></section>
   </div>
-  <figure><img src="screenshot.jpg" width="1280" height="935" alt="Панель Git Flow рядом с редактором модулей в 1C:EDT" loading="lazy"><figcaption>Подготовка файлов, сообщение коммита и граф истории в одной панели</figcaption></figure>
+  <div class="screenshots">
+    <figure><a href="screenshot.jpg"><img src="screenshot.jpg" alt="Панель Git Flow рядом с редактором" loading="lazy"></a><figcaption>Git Flow рядом с редактором</figcaption></figure>
+    <figure><a href="screenshot-under-navigator.jpg"><img src="screenshot-under-navigator.jpg" alt="Панель Git Flow под навигатором" loading="lazy"></a><figcaption>Git Flow под навигатором</figcaption></figure>
+  </div>
   <footer><a href="https://github.com/Oxotka/git-flow-edt/releases">История релизов</a><a href="https://github.com/Oxotka/git-flow-edt/issues/new?template=bug_report.yml">Сообщить об ошибке</a><a href="https://github.com/Oxotka/git-flow-edt/blob/main/LICENSE">Лицензия MIT</a></footer>
 </main>
 <script>

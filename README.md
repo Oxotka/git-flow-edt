@@ -6,7 +6,9 @@ Git Flow — панель для работы с Git в 1C:EDT. В ней мож
 
 [**Установить плагин**](https://oxotka.github.io/git-flow-edt/) · [Видеообзор](https://youtu.be/GiZ9AKqpAUU) · [Telegram автора](https://t.me/AriN1C) · [Сообщить об ошибке](https://github.com/Oxotka/git-flow-edt/issues/new?template=bug_report.yml)
 
-![Панель Git Flow в 1C:EDT: список изменений, сообщение коммита, статус PR и граф истории](docs/images/git-flow-edt.jpg)
+| Git Flow рядом с редактором | Git Flow под навигатором |
+| --- | --- |
+| [![Панель рядом с редактором](docs/images/git-flow-edt.jpg)](docs/images/git-flow-edt.jpg) | [![Панель под навигатором](docs/images/git-flow-edt-under-navigator.jpg)](docs/images/git-flow-edt-under-navigator.jpg) |
 
 **В версии 0.19.1** панель показывает запрос текущей ветки над поиском по истории.
 Отсюда можно открыть существующий MR или PR, создать первый запрос или начать новый после закрытия предыдущего без слияния.
