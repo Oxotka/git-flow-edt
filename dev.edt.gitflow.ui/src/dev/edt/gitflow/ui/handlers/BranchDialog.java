@@ -49,7 +49,7 @@ final class BranchDialog extends Dialog
         String listError = null;
         try
         {
-            BranchPicker picker = new BranchPicker(fields, repository, true, true, choice ->
+            BranchPicker picker = new BranchPicker(fields, repository, true, true, mode == Mode.CHECKOUT, choice ->
             {
                 selectedChoice = choice;
                 if (!feedback.getText().isEmpty())

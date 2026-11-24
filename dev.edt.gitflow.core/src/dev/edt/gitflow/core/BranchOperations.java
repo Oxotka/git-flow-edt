@@ -5,15 +5,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.SubMonitor;
 import org.eclipse.jgit.api.CreateBranchCommand.SetupUpstreamMode;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.ResetCommand.ResetType;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.api.errors.JGitInternalException;
 import org.eclipse.jgit.api.errors.NotMergedException;
 import org.eclipse.jgit.lib.BranchConfig;
 import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
@@ -361,6 +364,142 @@ public final class BranchOperations
             : new OperationResult(Kind.ERROR, "Сервер не сообщил результат операции с веткой " + destination); //$NON-NLS-1$
     }
 
+    public static boolean isUpstreamGone(Repository repository, String name) throws IOException
+    {
+        String tracking = new BranchConfig(repository.getConfig(), name).getTrackingBranch();
+        if (tracking == null)
+            return false;
+        var upstream = repository.exactRef(tracking);
+        return upstream == null || upstream.getObjectId() == null;
+    }
+
+    public static List<Ref> mergeTargets(Repository repository, String selectedRef) throws IOException
+    {
+        if (selectedRef != null)
+        {
+            Ref selected = repository.exactRef(selectedRef);
+            return selected == null ? List.of() : List.of(selected);
+        }
+
+        String origin = Constants.R_REMOTES + "origin/"; //$NON-NLS-1$
+        List<Ref> targets = new ArrayList<>();
+        Ref remoteHead = repository.exactRef(origin + Constants.HEAD);
+        if (remoteHead != null && remoteHead.isSymbolic() && remoteHead.getObjectId() != null)
+            targets.add(remoteHead.getLeaf());
+        for (String name : List.of("main", "master", "develop")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Ref ref = repository.exactRef(origin + name);
+            if (ref == null)
+                ref = repository.exactRef(Constants.R_HEADS + name);
+            if (ref != null && ref.getObjectId() != null
+                && targets.stream().noneMatch(target -> targetName(target).equals(name)))
+                targets.add(ref);
+        }
+        return targets;
+    }
+
+    private static String targetName(Ref target)
+    {
+        String name = Repository.shortenRefName(target.getName());
+        return target.getName().startsWith(Constants.R_REMOTES) ? name.substring(name.indexOf('/') + 1) : name;
+    }
+
+    public static boolean isMergeTarget(String name, List<Ref> targets)
+    {
+        return targets.stream().anyMatch(target -> targetName(target).equals(name));
+    }
+
+    public static Ref mergedTarget(RevWalk walk, Ref branch, List<Ref> targets) throws IOException
+    {
+        String name = Repository.shortenRefName(branch.getName());
+        if (targets.isEmpty() || branch.getObjectId() == null || isMergeTarget(name, targets))
+            return null;
+        RevCommit tip = walk.parseCommit(branch.getObjectId());
+        for (Ref target : targets)
+            if (target.getObjectId() != null && walk.isMergedInto(tip, walk.parseCommit(target.getObjectId())))
+                return target;
+        return null;
+    }
+
+    public static OperationResult deleteInactiveBranches(Repository repository, List<String> names,
+        String selectedTarget, IProgressMonitor monitor)
+    {
+        SubMonitor progress = SubMonitor.convert(monitor, names.size());
+        List<String> report = new ArrayList<>();
+        boolean hasFailures = false;
+        for (String name : names)
+        {
+            if (progress.isCanceled())
+            {
+                report.add("Удаление отменено."); //$NON-NLS-1$
+                return new OperationResult(Kind.CANCELLED, String.join("\n", report)); //$NON-NLS-1$
+            }
+            String failure;
+            try
+            {
+                failure = deleteInactiveBranch(repository, name, selectedTarget);
+            }
+            catch (IOException e)
+            {
+                failure = e.toString();
+            }
+            progress.worked(1);
+            hasFailures |= failure != null;
+            report.add(name + " — " + (failure == null ? "удалена" : failure)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return new OperationResult(hasFailures ? Kind.ERROR : Kind.SUCCESS, String.join("\n", report)); //$NON-NLS-1$
+    }
+
+    private static String deleteInactiveBranch(Repository repository, String name, String selectedTarget)
+        throws IOException
+    {
+        if (!RepositorySupport.isSafe(repository))
+            return "Репозиторий занят другой Git-операцией."; //$NON-NLS-1$
+        String localRef = Constants.R_HEADS + name;
+        if (localRef.equals(repository.getFullBranch()))
+            return "Нельзя удалить текущую ветку."; //$NON-NLS-1$
+        Ref branch = isValidBranchName(name) ? repository.exactRef(localRef) : null;
+        if (branch == null || branch.isSymbolic() || branch.getObjectId() == null)
+            return "Локальная ветка не найдена."; //$NON-NLS-1$
+
+        boolean gone = isUpstreamGone(repository, name);
+        List<Ref> targets = mergeTargets(repository, selectedTarget);
+        if (isMergeTarget(name, targets)
+            || selectedTarget != null && isMergeTarget(name, mergeTargets(repository, null)))
+            return "Ветка используется как цель слияния."; //$NON-NLS-1$
+        try (RevWalk walk = new RevWalk(repository))
+        {
+            Ref merged = mergedTarget(walk, branch, targets);
+            ObjectId retainedTip = merged != null ? merged.getObjectId()
+                : gone ? repository.resolve(Constants.HEAD) : null;
+            if (retainedTip == null)
+                return "Слияние ветки не подтверждено."; //$NON-NLS-1$
+
+            RefUpdate update = repository.updateRef(localRef, true);
+            update.setExpectedOldObjectId(branch.getObjectId());
+            update.setNewObjectId(retainedTip);
+            RefUpdate.Result result = update.delete(walk);
+            if (result == RefUpdate.Result.REJECTED)
+                return "Есть коммиты, не слитые в текущую ветку или в цель слияния."; //$NON-NLS-1$
+            if (result != RefUpdate.Result.FAST_FORWARD && result != RefUpdate.Result.NO_CHANGE)
+                return "Не удалось удалить локальную ветку: " + result; //$NON-NLS-1$
+        }
+        var config = repository.getConfig();
+        if (config.getSubsections("branch").contains(name)) //$NON-NLS-1$
+        {
+            config.unsetSection("branch", name); //$NON-NLS-1$
+            try
+            {
+                config.save();
+            }
+            catch (IOException e)
+            {
+                return "Ветка удалена, но не удалось сохранить настройки Git: " + e.getMessage(); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
     public static OperationResult delete(Repository repository, String name, IProgressMonitor monitor)
     {
         return delete(repository, name, false, monitor);
@@ -383,7 +522,7 @@ public final class BranchOperations
         monitor.beginTask("Удаление ветки", 1); //$NON-NLS-1$
         try
         {
-            Git.wrap(repository).branchDelete().setBranchNames(name).setForce(force).call();
+            Git.wrap(repository).branchDelete().setBranchNames(Constants.R_HEADS + name).setForce(force).call();
             return new OperationResult(Kind.SUCCESS, "Ветка удалена: " + name, true); //$NON-NLS-1$
         }
         catch (NotMergedException e)
@@ -391,7 +530,7 @@ public final class BranchOperations
             return new OperationResult(Kind.NEEDS_CONFIRMATION,
                 "Ветка «" + name + "» содержит коммиты, не слитые в текущую ветку. Удалить её принудительно?"); //$NON-NLS-1$
         }
-        catch (GitAPIException e)
+        catch (GitAPIException | JGitInternalException e)
         {
             return new OperationResult(Kind.ERROR, "Не удалось удалить ветку: " + e.getMessage()); //$NON-NLS-1$
         }

@@ -5,6 +5,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -25,7 +26,9 @@ import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.resource.ImageDescriptor;
+import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.DecorationOverlayIcon;
+import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.IDecoration;
 import org.eclipse.jface.window.Window;
 import org.eclipse.jgit.lib.Constants;
@@ -40,6 +43,7 @@ import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
@@ -56,6 +60,7 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.dialogs.ListDialog;
 import org.osgi.service.prefs.BackingStoreException;
 import org.osgi.service.prefs.Preferences;
 import dev.edt.gitflow.core.OperationResult;
@@ -69,12 +74,14 @@ final class BranchPicker
 
     private enum SortOrder { ACTIVITY_NEWEST_FIRST, ACTIVITY_OLDEST_FIRST, NAME_ASCENDING, NAME_DESCENDING }
 
+    private enum BranchFilter { ACTIVE, ALL, CLOSED_OR_MERGED }
+
     private record Folder(String path, boolean remote)
     {
     }
 
     record Choice(String name, String ref, boolean remote, boolean localExists, int lastActivity,
-        String author, String commitSubject, Kind kind)
+        String author, String commitSubject, Kind kind, boolean upstreamGone, String mergedInto)
     {
         String localName()
         {
@@ -119,6 +126,10 @@ final class BranchPicker
     private String remoteLoadError;
     private String tagLoadError;
     private final Menu contextMenu;
+    private final boolean filterLocalBranches;
+    private List<String> contextBranches = List.of();
+    private BranchFilter branchFilter = BranchFilter.ACTIVE;
+    private String selectedMergeTarget;
 
     BranchPicker(Composite parent, Repository repository, boolean includeRemote,
         Consumer<Choice> onSelect, Runnable onActivate) throws IOException
@@ -129,7 +140,14 @@ final class BranchPicker
     BranchPicker(Composite parent, Repository repository, boolean includeRemote, boolean includeTags,
         Consumer<Choice> onSelect, Runnable onActivate) throws IOException
     {
+        this(parent, repository, includeRemote, includeTags, false, onSelect, onActivate);
+    }
+
+    BranchPicker(Composite parent, Repository repository, boolean includeRemote, boolean includeTags,
+        boolean filterLocalBranches, Consumer<Choice> onSelect, Runnable onActivate) throws IOException
+    {
         this.onSelect = onSelect;
+        this.filterLocalBranches = filterLocalBranches;
         this.onActivate = onActivate;
         this.repository = repository;
         this.includeRemote = includeRemote;
@@ -149,13 +167,26 @@ final class BranchPicker
             pinnedFolders.addAll(List.of(savedFolders.split("\n"))); //$NON-NLS-1$
         branchIndex.setPinnedFolders(pinnedFolders);
         panel = new Composite(parent, SWT.NONE);
-        panel.setLayout(new GridLayout(3, false));
+        int columns = filterLocalBranches ? 4 : 3;
+        panel.setLayout(new GridLayout(columns, false));
         GridData panelData = new GridData(SWT.FILL, SWT.FILL, true, true);
         panelData.horizontalSpan = 2;
         panel.setLayoutData(panelData);
         search = new Text(panel, SWT.SEARCH | SWT.ICON_SEARCH | SWT.CANCEL);
         search.setMessage(Messages.get("searchBranches")); //$NON-NLS-1$
         search.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        if (filterLocalBranches)
+        {
+            Combo filter = new Combo(panel, SWT.DROP_DOWN | SWT.READ_ONLY);
+            filter.setItems(Messages.get("activeBranches"), Messages.get("allBranches"),
+                Messages.get("goneBranches"));
+            filter.select(0);
+            filter.addListener(SWT.Selection, event ->
+            {
+                branchFilter = BranchFilter.values()[filter.getSelectionIndex()];
+                rebuild();
+            });
+        }
         favoriteButton = new Button(panel, SWT.PUSH);
         favoriteButton.setText(Messages.get("removeFavorite")); //$NON-NLS-1$
         int favoriteWidth = favoriteButton.computeSize(SWT.DEFAULT, SWT.DEFAULT).x;
@@ -186,6 +217,13 @@ final class BranchPicker
         nameDescendingItem.addListener(SWT.Selection, event -> chooseSortOrder(nameDescendingItem,
             SortOrder.NAME_DESCENDING));
         hierarchyItem.addListener(SWT.Selection, event -> setHierarchyEnabled(hierarchyItem.getSelection()));
+        if (filterLocalBranches)
+        {
+            new MenuItem(settingsMenu, SWT.SEPARATOR);
+            MenuItem mergeTarget = menuItem(settingsMenu, Messages.get("branchMergeTarget"), this::chooseMergeTarget);
+            settingsMenu.addListener(SWT.Show, event -> mergeTarget.setEnabled(!localLoading && !remoteLoading
+                && !tagsLoading));
+        }
         settingsMenu.addListener(SWT.Show, event -> updateSettingsMenu());
         settingsButton.addListener(SWT.Selection, event ->
         {
@@ -194,8 +232,9 @@ final class BranchPicker
             settingsMenu.setVisible(true);
         });
         panel.addListener(SWT.Dispose, event -> settingsMenu.dispose());
-        tree = new Tree(panel, SWT.BORDER | SWT.SINGLE | SWT.V_SCROLL | SWT.H_SCROLL | SWT.FULL_SELECTION);
-        GridData treeData = new GridData(SWT.FILL, SWT.FILL, true, true, 3, 1);
+        int selectionStyle = filterLocalBranches ? SWT.MULTI : SWT.SINGLE;
+        tree = new Tree(panel, SWT.BORDER | selectionStyle | SWT.V_SCROLL | SWT.H_SCROLL | SWT.FULL_SELECTION);
+        GridData treeData = new GridData(SWT.FILL, SWT.FILL, true, true, columns, 1);
         treeData.heightHint = 220;
         treeData.widthHint = 680;
         tree.setLayoutData(treeData);
@@ -248,6 +287,9 @@ final class BranchPicker
                 }
                 int x = item.getTextBounds(0).x;
                 x = paintPart(gc, label + "  ", originalFont, primary, x, event.y, event.height); //$NON-NLS-1$
+                String status = branchStatus(choice);
+                if (!status.isEmpty())
+                    x = paintPart(gc, status + "  ·  ", smallFont, secondary, x, event.y, event.height);
                 if (choice.lastActivity() > 0)
                     x = paintPart(gc, relativeTime(choice.lastActivity()) + "  ·  ", //$NON-NLS-1$
                         smallFont, secondary, x, event.y, event.height);
@@ -268,7 +310,8 @@ final class BranchPicker
         {
             Control focus = display.getFocusControl();
             char character = event.character;
-            if (focus != search && isInside(focus, panel) && !Character.isISOControl(character)
+            if (focus != search && !(focus instanceof Button)
+                && !(focus instanceof Combo) && isInside(focus, panel) && !Character.isISOControl(character)
                 && character != 0 && (event.stateMask & (SWT.CTRL | SWT.ALT | SWT.COMMAND)) == 0)
             {
                 search.setText(search.getText() + character);
@@ -313,14 +356,16 @@ final class BranchPicker
         });
         tree.addListener(SWT.Selection, event ->
         {
-            selected = (Choice) ((TreeItem) event.item).getData();
+            selected = tree.getSelectionCount() == 1 && event.item instanceof TreeItem item
+                && item.getData() instanceof Choice choice ? choice : null;
             favoriteButton.setEnabled(selected != null);
             updateFavoriteButton();
-            if (selected != null)
-                onSelect.accept(selected);
+            onSelect.accept(selected);
         });
         tree.addListener(SWT.DefaultSelection, event ->
         {
+            if (tree.getSelectionCount() > 1)
+                return;
             if (event.item instanceof TreeItem item && item.getData() instanceof Choice choice)
             {
                 choose(choice);
@@ -334,10 +379,20 @@ final class BranchPicker
         tree.setMenu(contextMenu);
         tree.addListener(SWT.MenuDetect, event ->
         {
-            TreeItem item = event.x < 0 || event.y < 0 ? null
+            contextBranches = List.of();
+            TreeItem[] selection = tree.getSelection();
+            boolean keyboard = event.detail == SWT.MENU_KEYBOARD;
+            TreeItem item = keyboard ? (selection.length == 0 ? null : selection[0])
                 : tree.getItem(tree.toControl(event.x, event.y));
-            if ((event.x < 0 || event.y < 0) && tree.getSelectionCount() == 1)
-                item = tree.getSelection()[0];
+            if (selection.length > 1 && Arrays.asList(selection).contains(item))
+            {
+                List<Choice> selectedChoices = Arrays.stream(selection).map(TreeItem::getData)
+                    .filter(Choice.class::isInstance).map(Choice.class::cast).toList();
+                if (selectedChoices.stream().allMatch(choice -> !choice.remote() && choice.kind() == Kind.BRANCH))
+                    contextBranches = selectedChoices.stream().map(Choice::name).distinct().toList();
+                event.doit = !contextBranches.isEmpty();
+                return;
+            }
             if (item != null && item.getData() instanceof Folder folder && folder.remote())
             {
                 tree.setData("contextFolder", folder); //$NON-NLS-1$
@@ -355,6 +410,13 @@ final class BranchPicker
         {
             for (MenuItem item : contextMenu.getItems())
                 item.dispose();
+            if (!contextBranches.isEmpty())
+            {
+                List<String> names = contextBranches;
+                contextBranches = List.of();
+                menuItem(contextMenu, Messages.get("deleteLocalBranches"), () -> deleteSelectedBranches(names));
+                return;
+            }
             if (tree.getData("contextFolder") instanceof Folder folder) //$NON-NLS-1$
             {
                 tree.setData("contextFolder", null); //$NON-NLS-1$
@@ -373,6 +435,7 @@ final class BranchPicker
 
     private void load(Repository repository, boolean includeRemote)
     {
+        String mergeTarget = selectedMergeTarget;
         Job job = new Job(Messages.get("searchBranches")) //$NON-NLS-1$
         {
             @Override
@@ -382,13 +445,21 @@ final class BranchPicker
                 List<Choice> local = new ArrayList<>();
                 try (RevWalk walk = new RevWalk(repository))
                 {
+                    List<Ref> targets = filterLocalBranches
+                        ? BranchOperations.mergeTargets(repository, mergeTarget) : List.of();
+                    List<Ref> automaticTargets = mergeTarget == null ? targets
+                        : BranchOperations.mergeTargets(repository, null);
                     for (Ref ref : repository.getRefDatabase().getRefsByPrefix(Constants.R_HEADS))
                     {
                         if (monitor.isCanceled())
                             return Status.CANCEL_STATUS;
                         String name = Repository.shortenRefName(ref.getName());
                         localNames.add(name);
-                        local.add(choice(walk, name, ref, false, true, Kind.BRANCH));
+                        boolean gone = filterLocalBranches && BranchOperations.isUpstreamGone(repository, name);
+                        Ref merged = BranchOperations.isMergeTarget(name, automaticTargets) ? null
+                            : BranchOperations.mergedTarget(walk, ref, targets);
+                        String mergedInto = merged == null ? null : Repository.shortenRefName(merged.getName());
+                        local.add(choice(walk, name, ref, false, true, Kind.BRANCH, gone, mergedInto));
                     }
                     local.sort(byActivity());
                 }
@@ -726,11 +797,80 @@ final class BranchPicker
 
     private void delete(Choice choice)
     {
+        if (choice.mergedInto() != null)
+        {
+            String mergeTarget = selectedMergeTarget;
+            OperationJob.schedule(repository, tree.getShell(), Messages.get("deleteBranch"), //$NON-NLS-1$
+                (repo, monitor) -> BranchOperations.deleteInactiveBranches(repo, List.of(choice.name()),
+                    mergeTarget, monitor), null, this::refreshAfter);
+            return;
+        }
         OperationJob.schedule(repository, tree.getShell(), Messages.get("deleteBranch"), //$NON-NLS-1$
             (selectedRepository, monitor) -> BranchOperations.delete(selectedRepository, choice.name(), false,
                 monitor),
             (selectedRepository, monitor) -> BranchOperations.delete(selectedRepository, choice.name(), true,
                 monitor), this::refreshAfter);
+    }
+
+    private void chooseMergeTarget()
+    {
+        List<String> targets = new ArrayList<>();
+        String automatic = "";
+        targets.add(automatic);
+        branches.stream().filter(choice -> choice.kind() == Kind.BRANCH).map(Choice::ref)
+            .distinct().sorted().forEach(targets::add);
+        ListDialog dialog = new ListDialog(tree.getShell());
+        dialog.setTitle(Messages.get("branchMergeTarget"));
+        dialog.setContentProvider(ArrayContentProvider.getInstance());
+        dialog.setLabelProvider(new LabelProvider()
+        {
+            @Override
+            public String getText(Object element)
+            {
+                String ref = (String) element;
+                return ref.isEmpty() ? Messages.get("automaticMergeTargets")
+                    : Repository.shortenRefName(ref);
+            }
+        });
+        dialog.setInput(targets);
+        dialog.setInitialSelections(new Object[] { selectedMergeTarget == null ? automatic : selectedMergeTarget });
+        if (dialog.open() == Window.OK && dialog.getResult().length > 0)
+        {
+            String target = (String) dialog.getResult()[0];
+            selectedMergeTarget = target.isEmpty() ? null : target;
+            refreshBranches();
+        }
+    }
+
+    private void deleteSelectedBranches(List<String> names)
+    {
+        var shell = tree.getShell();
+        String title = Messages.get("deleteLocalBranches");
+        String mergeTarget = selectedMergeTarget;
+        OperationJob.schedule(repository, shell, title,
+            (repo, monitor) -> BranchOperations.deleteInactiveBranches(repo, names, mergeTarget, monitor),
+            null, result ->
+            {
+                if (!panel.isDisposed())
+                    refreshBranches();
+                if (!shell.isDisposed() && !result.succeeded())
+                    MessageDialog.openWarning(shell, title, result.message());
+            });
+    }
+
+    private boolean visible(Choice choice)
+    {
+        return switch (branchFilter)
+        {
+            case ALL -> true;
+            case ACTIVE -> !closedOrMerged(choice) || choice.name().equals(currentBranch);
+            case CLOSED_OR_MERGED -> closedOrMerged(choice);
+        };
+    }
+
+    private static boolean closedOrMerged(Choice choice)
+    {
+        return choice.upstreamGone() || choice.mergedInto() != null;
     }
 
     private void refreshAfter(OperationResult result)
@@ -795,7 +935,22 @@ final class BranchPicker
             TreeItem local = root(Messages.get("localBranches")); //$NON-NLS-1$
             TreeItem remote = root(Messages.get("remoteBranches")); //$NON-NLS-1$
             TreeItem tags = includeTags ? root(Messages.get("tags")) : null; //$NON-NLS-1$
-            for (Choice branch : sorted(favoriteChoices))
+            boolean closedFilter = branchFilter == BranchFilter.CLOSED_OR_MERGED;
+            var localMatches = branchIndex.filter(BranchPickerIndex.Group.LOCAL, query);
+            List<Choice> localChoices = choices(localMatches).stream().filter(this::visible).toList();
+            var remoteMatches = branchIndex.filter(BranchPickerIndex.Group.REMOTE, query);
+            var tagMatches = branchIndex.filter(BranchPickerIndex.Group.TAG, query);
+            boolean otherMatches = !remoteMatches.isEmpty() || !tagMatches.isEmpty();
+            boolean searchAll = !query.isEmpty() && branchFilter != BranchFilter.ALL
+                && localChoices.isEmpty() && (closedFilter || !otherMatches)
+                && (!localMatches.isEmpty() || otherMatches);
+            if (searchAll)
+                localChoices = choices(localMatches);
+            boolean closedOnly = closedFilter && !searchAll;
+            for (Choice branch : closedOnly ? List.<Choice>of()
+                : sorted(favoriteChoices).stream()
+                    .filter(branch -> (searchAll || visible(branch))
+                        && branch.name().toLowerCase(Locale.ROOT).contains(query)).toList())
             {
                 TreeItem item = new TreeItem(starred, SWT.NONE);
                 item.setText(rowText("★ " + branch.name(), branch)); //$NON-NLS-1$
@@ -803,17 +958,19 @@ final class BranchPicker
                 item.setData(branch);
                 item.setData("label", "★ " + branch.name()); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            List<Choice> localChoices = choices(branchIndex.filter(BranchPickerIndex.Group.LOCAL, query));
             if (hierarchyEnabled)
                 addGroupedBranches(local, localChoices, BranchPickerIndex.Group.LOCAL);
             else
                 addFlatBranches(local, localChoices);
-            if (hierarchyEnabled)
-                addRemoteBranches(remote, query);
-            else
-                addFlatBranches(remote, choices(branchIndex.filter(BranchPickerIndex.Group.REMOTE, query)));
-            if (includeTags)
-                addFlatBranches(tags, choices(branchIndex.filter(BranchPickerIndex.Group.TAG, query)));
+            if (!closedOnly)
+            {
+                if (hierarchyEnabled)
+                    addRemoteBranches(remote, query);
+                else
+                    addFlatBranches(remote, choices(remoteMatches));
+                if (includeTags)
+                    addFlatBranches(tags, choices(tagMatches));
+            }
             if (localLoadError != null)
             {
                 TreeItem status = new TreeItem(local, SWT.NONE);
@@ -832,16 +989,27 @@ final class BranchPicker
             starred.setExpanded(true);
             local.setExpanded(true);
             remote.setExpanded(true);
-            if (starred.getItemCount() == 0)
+            if (closedOnly)
+            {
+                starred.dispose();
+                remote.dispose();
+                if (tags != null)
+                    tags.dispose();
+                if (local.getItemCount() == 0 && !localLoading)
+                    new TreeItem(local, SWT.NONE).setText(Messages.get("goneBranchesEmpty"));
+            }
+            else if (starred.getItemCount() == 0 && !query.isEmpty())
+                starred.dispose();
+            else if (starred.getItemCount() == 0)
             {
                 TreeItem empty = new TreeItem(starred, SWT.NONE);
                 empty.setText(Messages.get("favoritesEmpty")); //$NON-NLS-1$
             }
             if (local.getItemCount() == 0 && !localLoading)
                 local.dispose();
-            if (remote.getItemCount() == 0 && !remoteLoading)
+            if (!remote.isDisposed() && remote.getItemCount() == 0 && !remoteLoading)
                 remote.dispose();
-            if (tags != null && tags.getItemCount() == 0)
+            if (tags != null && !tags.isDisposed() && tags.getItemCount() == 0)
                 tags.dispose();
             if (!query.isEmpty())
             {
@@ -1029,8 +1197,19 @@ final class BranchPicker
     private void addGroupedBranches(TreeItem root, List<Choice> choices, BranchPickerIndex.Group group)
     {
         Map<String, TreeItem> folderItems = new HashMap<>();
+        Set<String> visiblePaths = new LinkedHashSet<>();
+        for (Choice choice : choices)
+        {
+            String path = choice.name();
+            for (int slash = path.lastIndexOf('/'); slash >= 0; slash = path.lastIndexOf('/'))
+            {
+                path = path.substring(0, slash);
+                visiblePaths.add(path);
+            }
+        }
         for (String path : branchIndex.folderPaths(group, search.getText(), null))
-            addFolderPath(root, branchIndex.folderParts(path), "", false, folderItems); //$NON-NLS-1$
+            if (visiblePaths.contains(path))
+                addFolderPath(root, branchIndex.folderParts(path), "", false, folderItems); //$NON-NLS-1$
         for (Choice choice : choices)
             addGrouped(root, choice, branchIndex.pathParts(choice.ref()), "", folderItems); //$NON-NLS-1$
     }
@@ -1089,20 +1268,26 @@ final class BranchPicker
     private static Choice choice(RevWalk walk, String name, Ref ref, boolean remote, boolean localExists, Kind kind)
         throws IOException
     {
+        return choice(walk, name, ref, remote, localExists, kind, false, null);
+    }
+
+    private static Choice choice(RevWalk walk, String name, Ref ref, boolean remote, boolean localExists, Kind kind,
+        boolean upstreamGone, String mergedInto) throws IOException
+    {
         if (ref.getObjectId() == null)
-            return new Choice(name, ref.getName(), remote, localExists, 0, "", "", kind); //$NON-NLS-1$ //$NON-NLS-2$
+            return new Choice(name, ref.getName(), remote, localExists, 0, "", "", kind, upstreamGone, mergedInto); //$NON-NLS-1$ //$NON-NLS-2$
         try
         {
             var objectId = ref.getPeeledObjectId() == null ? ref.getObjectId() : ref.getPeeledObjectId();
             var commit = walk.parseCommit(objectId);
             return new Choice(name, ref.getName(), remote, localExists, commit.getCommitTime(),
-                commit.getAuthorIdent().getName(), commit.getShortMessage(), kind);
+                commit.getAuthorIdent().getName(), commit.getShortMessage(), kind, upstreamGone, mergedInto);
         }
         catch (IOException e)
         {
             if (kind == Kind.BRANCH)
                 throw e;
-            return new Choice(name, ref.getName(), remote, localExists, 0, "", "", kind); //$NON-NLS-1$ //$NON-NLS-2$
+            return new Choice(name, ref.getName(), remote, localExists, 0, "", "", kind, upstreamGone, mergedInto); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -1122,13 +1307,21 @@ final class BranchPicker
         item.setImage(0, image);
     }
 
-    private static String rowText(String name, Choice branch)
+    private String branchStatus(Choice branch)
+    {
+        String gone = branch.upstreamGone() ? Messages.get("upstreamGone") : "";
+        String merged = branch.mergedInto() != null ? Messages.get("branchMerged") : "";
+        return gone.isEmpty() || merged.isEmpty() ? gone + merged : gone + "  ·  " + merged;
+    }
+
+    private String rowText(String name, Choice branch)
     {
         String age = branch.lastActivity() > 0
             ? "  " + relativeTime(branch.lastActivity()) : ""; //$NON-NLS-1$ //$NON-NLS-2$
         String author = branch.author().isEmpty() ? "" : "  ·  " + branch.author(); //$NON-NLS-1$ //$NON-NLS-2$
         String subject = branch.commitSubject().isEmpty() ? "" : "  ·  " + branch.commitSubject(); //$NON-NLS-1$ //$NON-NLS-2$
-        return name + age + author + subject;
+        String status = branchStatus(branch);
+        return name + (status.isEmpty() ? "" : "  " + status) + age + author + subject;
     }
 
     private static int paintPart(GC gc, String text, Font font, Color color,

@@ -2,10 +2,13 @@ package dev.edt.gitflow.core.tests;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.jgit.api.Git;
@@ -19,6 +22,69 @@ import dev.edt.gitflow.core.WorkingChanges;
 
 public class BranchOperationsTest
 {
+    @Test
+    public void removesMergedLocalBranchesAndPreservesServerRefs() throws Exception
+    {
+        Path work = Files.createTempDirectory("gitflow-cleanup-");
+        try (Git git = TestRepository.init(work.toFile(), "main"))
+        {
+            commit(git, work, "base");
+            var repository = git.getRepository();
+            String current = repository.getBranch();
+            git.branchCreate().setName("gone").call();
+            git.tag().setName("gone").call();
+            git.branchCreate().setName("local").call();
+            git.branchCreate().setName("tracked").call();
+            repository.updateRef("refs/remotes/origin/tracked").link("refs/heads/tracked");
+            git.checkout().setCreateBranch(true).setName("unmerged").call();
+            commit(git, work, "unique");
+            git.checkout().setName(current).call();
+            git.checkout().setCreateBranch(true).setName("merged").call();
+            commit(git, work, "merged in develop only");
+            var target = repository.updateRef("refs/remotes/origin/release/2026");
+            target.setNewObjectId(repository.resolve("HEAD"));
+            target.update();
+            repository.updateRef("refs/remotes/origin/HEAD").link("refs/remotes/origin/release/2026");
+            ObjectId mergedTip = repository.resolve("HEAD");
+            var tracking = repository.updateRef("refs/remotes/origin/merged");
+            tracking.setNewObjectId(mergedTip);
+            tracking.update();
+            git.checkout().setName(current).call();
+
+            var config = repository.getConfig();
+            config.setString("remote", "origin", "fetch", "+refs/heads/*:refs/remotes/origin/*");
+            for (String name : List.of("gone", "tracked", "unmerged", "merged", current))
+            {
+                config.setString("branch", name, "remote", "origin");
+                config.setString("branch", name, "merge", "refs/heads/" + name);
+            }
+            assertTrue(BranchOperations.isUpstreamGone(repository, "gone"));
+            assertFalse(BranchOperations.isUpstreamGone(repository, "local"));
+            assertFalse(BranchOperations.isUpstreamGone(repository, "tracked"));
+            try (var walk = new org.eclipse.jgit.revwalk.RevWalk(repository))
+            {
+                var branch = repository.exactRef("refs/heads/merged");
+                assertEquals("refs/remotes/origin/release/2026", BranchOperations.mergedTarget(walk, branch,
+                    BranchOperations.mergeTargets(repository, null)).getName());
+                assertEquals("refs/remotes/origin/release/2026", BranchOperations.mergedTarget(walk, branch,
+                    BranchOperations.mergeTargets(repository, "refs/remotes/origin/release/2026")).getName());
+                assertNull(BranchOperations.mergedTarget(walk, branch,
+                    BranchOperations.mergeTargets(repository, "refs/heads/" + current)));
+            }
+
+
+            var result = BranchOperations.deleteInactiveBranches(repository,
+                List.of("gone", "unmerged", "merged", current), null, new NullProgressMonitor());
+            assertEquals(OperationResult.Kind.ERROR, result.kind());
+            assertNull(repository.exactRef("refs/heads/gone"));
+            assertNull(repository.exactRef("refs/heads/merged"));
+            assertEquals(mergedTip, repository.resolve("refs/remotes/origin/merged"));
+            assertNotNull(repository.exactRef("refs/tags/gone"));
+            for (String name : List.of("local", "tracked", "unmerged", current))
+                assertNotNull(name, repository.exactRef("refs/heads/" + name));
+        }
+    }
+
     @Test
     public void checkoutMergesNonoverlappingUnstagedEditsInSameFile() throws Exception
     {
