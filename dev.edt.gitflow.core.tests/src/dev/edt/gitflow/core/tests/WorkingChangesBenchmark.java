@@ -192,7 +192,12 @@ public class WorkingChangesBenchmark
             try (var paths = Files.walk(work))
             {
                 for (Path path : paths.sorted(Comparator.reverseOrder()).toList())
+                {
+                    // Файлы объектов Git создаются только для чтения: без снятия
+                    // атрибута Windows отказывает в удалении.
+                    path.toFile().setWritable(true);
                     Files.delete(path);
+                }
             }
         }
     }
