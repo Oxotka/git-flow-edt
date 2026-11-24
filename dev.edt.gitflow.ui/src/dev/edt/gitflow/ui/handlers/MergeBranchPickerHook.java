@@ -98,7 +98,7 @@ public final class MergeBranchPickerHook
             nativeTree = control;
             Control original = nativeTree;
             Composite parent = nativeTree.getParent();
-            picker = new BranchPicker(parent, repository, true, true, choice ->
+            picker = new BranchPicker(parent, repository, true, true, true, false, choice ->
             {
                 try
                 {

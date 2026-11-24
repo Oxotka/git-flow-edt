@@ -131,20 +131,9 @@ final class BranchPicker
     private BranchFilter branchFilter = BranchFilter.ACTIVE;
     private String selectedMergeTarget;
 
-    BranchPicker(Composite parent, Repository repository, boolean includeRemote,
-        Consumer<Choice> onSelect, Runnable onActivate) throws IOException
-    {
-        this(parent, repository, includeRemote, false, onSelect, onActivate);
-    }
-
     BranchPicker(Composite parent, Repository repository, boolean includeRemote, boolean includeTags,
-        Consumer<Choice> onSelect, Runnable onActivate) throws IOException
-    {
-        this(parent, repository, includeRemote, includeTags, false, onSelect, onActivate);
-    }
-
-    BranchPicker(Composite parent, Repository repository, boolean includeRemote, boolean includeTags,
-        boolean filterLocalBranches, Consumer<Choice> onSelect, Runnable onActivate) throws IOException
+        boolean filterLocalBranches, boolean multiSelect, Consumer<Choice> onSelect, Runnable onActivate)
+        throws IOException
     {
         this.onSelect = onSelect;
         this.filterLocalBranches = filterLocalBranches;
@@ -158,7 +147,8 @@ final class BranchPicker
         BranchHierarchySettings.initialize();
         String id = UUID.nameUUIDFromBytes(repository.getDirectory().getAbsolutePath()
             .getBytes(StandardCharsets.UTF_8)).toString();
-        preferences = InstanceScope.INSTANCE.getNode("dev.edt.gitflow.ui").node("favorites").node(id); //$NON-NLS-1$ //$NON-NLS-2$
+        Preferences uiPreferences = InstanceScope.INSTANCE.getNode("dev.edt.gitflow.ui"); //$NON-NLS-1$
+        preferences = uiPreferences.node("favorites").node(id); //$NON-NLS-1$
         String saved = preferences.get("refs", ""); //$NON-NLS-1$ //$NON-NLS-2$
         if (!saved.isEmpty())
             favorites.addAll(List.of(saved.split("\n"))); //$NON-NLS-1$
@@ -180,10 +170,24 @@ final class BranchPicker
             Combo filter = new Combo(panel, SWT.DROP_DOWN | SWT.READ_ONLY);
             filter.setItems(Messages.get("activeBranches"), Messages.get("allBranches"),
                 Messages.get("goneBranches"));
-            filter.select(0);
+            String filterKey = "branchPickerFilter"; //$NON-NLS-1$
+            String savedFilter = uiPreferences.get(filterKey, BranchFilter.ACTIVE.name());
+            branchFilter = Arrays.stream(BranchFilter.values()).filter(value -> value.name().equals(savedFilter))
+                .findFirst().orElse(BranchFilter.ACTIVE);
+            filter.select(branchFilter.ordinal());
             filter.addListener(SWT.Selection, event ->
             {
                 branchFilter = BranchFilter.values()[filter.getSelectionIndex()];
+                uiPreferences.put(filterKey, branchFilter.name());
+                try
+                {
+                    uiPreferences.flush();
+                }
+                catch (BackingStoreException e)
+                {
+                    Platform.getLog(BranchPicker.class).log(new Status(IStatus.WARNING, "dev.edt.gitflow.ui", //$NON-NLS-1$
+                        "Could not save the branch picker filter", e)); //$NON-NLS-1$
+                }
                 rebuild();
             });
         }
@@ -232,7 +236,7 @@ final class BranchPicker
             settingsMenu.setVisible(true);
         });
         panel.addListener(SWT.Dispose, event -> settingsMenu.dispose());
-        int selectionStyle = filterLocalBranches ? SWT.MULTI : SWT.SINGLE;
+        int selectionStyle = multiSelect ? SWT.MULTI : SWT.SINGLE;
         tree = new Tree(panel, SWT.BORDER | selectionStyle | SWT.V_SCROLL | SWT.H_SCROLL | SWT.FULL_SELECTION);
         GridData treeData = new GridData(SWT.FILL, SWT.FILL, true, true, columns, 1);
         treeData.heightHint = 220;
@@ -244,6 +248,14 @@ final class BranchPicker
         for (FontData data : smallData)
             data.setHeight(Math.max(8, data.getHeight() - 1));
         smallFont = new Font(tree.getDisplay(), smallData);
+        FontData[] statusData = tree.getFont().getFontData();
+        for (FontData data : statusData)
+            data.setStyle(data.getStyle() | SWT.BOLD);
+        Font statusFont = new Font(tree.getDisplay(), statusData);
+        var foreground = tree.getForeground().getRGB();
+        var background = tree.getBackground().getRGB();
+        Color mutedBranch = new Color(tree.getDisplay(), (3 * foreground.red + background.red) / 4,
+            (3 * foreground.green + background.green) / 4, (3 * foreground.blue + background.blue) / 4);
         ImageDescriptor branchDescriptor = egitImage("icons/obj16/branch_obj.png"); //$NON-NLS-1$
         branchImage = branchDescriptor.createImage();
         ImageDescriptor checkedOverlay = egitImage("icons/ovr/checkedout_ov.png"); //$NON-NLS-1$
@@ -256,6 +268,8 @@ final class BranchPicker
             currentBranchImage.dispose();
             tagImage.dispose();
             smallFont.dispose();
+            statusFont.dispose();
+            mutedBranch.dispose();
         });
         tree.addListener(SWT.EraseItem, event ->
         {
@@ -286,10 +300,14 @@ final class BranchPicker
                     gc.drawImage(icon, bounds.x, bounds.y);
                 }
                 int x = item.getTextBounds(0).x;
-                x = paintPart(gc, label + "  ", originalFont, primary, x, event.y, event.height); //$NON-NLS-1$
+                Color nameColor = !selectedRow && closedOrMerged(choice) ? mutedBranch : primary;
+                x = paintPart(gc, label + "  ", originalFont, nameColor, x, event.y, event.height); //$NON-NLS-1$
                 String status = branchStatus(choice);
                 if (!status.isEmpty())
-                    x = paintPart(gc, status + "  ·  ", smallFont, secondary, x, event.y, event.height);
+                {
+                    x = paintPart(gc, status, statusFont, primary, x, event.y, event.height);
+                    x = paintPart(gc, "  ·  ", smallFont, secondary, x, event.y, event.height); //$NON-NLS-1$
+                }
                 if (choice.lastActivity() > 0)
                     x = paintPart(gc, relativeTime(choice.lastActivity()) + "  ·  ", //$NON-NLS-1$
                         smallFont, secondary, x, event.y, event.height);
@@ -481,8 +499,9 @@ final class BranchPicker
                             if (!ref.isSymbolic() && !ref.getName().endsWith("/HEAD")) //$NON-NLS-1$
                             {
                                 String name = Repository.shortenRefName(ref.getName());
-                                remote.add(choice(walk, name, ref, true,
-                                    localNames.contains(name.substring(name.indexOf('/') + 1)), Kind.BRANCH));
+                                String localName = name.substring(name.indexOf('/') + 1);
+                                remote.add(choice(walk, name, ref, true, localNames.contains(localName),
+                                    Kind.BRANCH));
                             }
                         }
                         remote.sort(byActivity());
@@ -939,19 +958,21 @@ final class BranchPicker
             var localMatches = branchIndex.filter(BranchPickerIndex.Group.LOCAL, query);
             List<Choice> localChoices = choices(localMatches).stream().filter(this::visible).toList();
             var remoteMatches = branchIndex.filter(BranchPickerIndex.Group.REMOTE, query);
+            List<Choice> remoteChoices = choices(remoteMatches).stream().filter(this::visible).toList();
             var tagMatches = branchIndex.filter(BranchPickerIndex.Group.TAG, query);
-            boolean otherMatches = !remoteMatches.isEmpty() || !tagMatches.isEmpty();
             boolean searchAll = !query.isEmpty() && branchFilter != BranchFilter.ALL
-                && localChoices.isEmpty() && (closedFilter || !otherMatches)
-                && (!localMatches.isEmpty() || otherMatches);
+                && localChoices.isEmpty() && (closedFilter || remoteChoices.isEmpty() && tagMatches.isEmpty())
+                && (!localMatches.isEmpty() || !remoteMatches.isEmpty() || !tagMatches.isEmpty());
             if (searchAll)
-                localChoices = choices(localMatches);
-            boolean closedOnly = closedFilter && !searchAll;
-            for (Choice branch : closedOnly ? List.<Choice>of()
-                : sorted(favoriteChoices).stream()
-                    .filter(branch -> (searchAll || visible(branch))
-                        && branch.name().toLowerCase(Locale.ROOT).contains(query)).toList())
             {
+                localChoices = choices(localMatches);
+                remoteChoices = choices(remoteMatches);
+            }
+            boolean closedOnly = closedFilter && !searchAll;
+            for (Choice branch : sorted(favoriteChoices))
+            {
+                if (!branch.name().toLowerCase(Locale.ROOT).contains(query))
+                    continue;
                 TreeItem item = new TreeItem(starred, SWT.NONE);
                 item.setText(rowText("★ " + branch.name(), branch)); //$NON-NLS-1$
                 setBranchImage(item, branch);
@@ -965,9 +986,9 @@ final class BranchPicker
             if (!closedOnly)
             {
                 if (hierarchyEnabled)
-                    addRemoteBranches(remote, query);
+                    addRemoteBranches(remote, query, remoteChoices);
                 else
-                    addFlatBranches(remote, choices(remoteMatches));
+                    addFlatBranches(remote, remoteChoices);
                 if (includeTags)
                     addFlatBranches(tags, choices(tagMatches));
             }
@@ -991,14 +1012,13 @@ final class BranchPicker
             remote.setExpanded(true);
             if (closedOnly)
             {
-                starred.dispose();
                 remote.dispose();
                 if (tags != null)
                     tags.dispose();
                 if (local.getItemCount() == 0 && !localLoading)
                     new TreeItem(local, SWT.NONE).setText(Messages.get("goneBranchesEmpty"));
             }
-            else if (starred.getItemCount() == 0 && !query.isEmpty())
+            if (starred.getItemCount() == 0 && !query.isEmpty())
                 starred.dispose();
             else if (starred.getItemCount() == 0)
             {
@@ -1197,6 +1217,16 @@ final class BranchPicker
     private void addGroupedBranches(TreeItem root, List<Choice> choices, BranchPickerIndex.Group group)
     {
         Map<String, TreeItem> folderItems = new HashMap<>();
+        Set<String> visiblePaths = visibleFolderPaths(choices);
+        for (String path : branchIndex.folderPaths(group, search.getText(), null))
+            if (visiblePaths.contains(path))
+                addFolderPath(root, branchIndex.folderParts(path), "", false, folderItems); //$NON-NLS-1$
+        for (Choice choice : choices)
+            addGrouped(root, choice, branchIndex.pathParts(choice.ref()), "", folderItems); //$NON-NLS-1$
+    }
+
+    private static Set<String> visibleFolderPaths(List<Choice> choices)
+    {
         Set<String> visiblePaths = new LinkedHashSet<>();
         for (Choice choice : choices)
         {
@@ -1207,18 +1237,20 @@ final class BranchPicker
                 visiblePaths.add(path);
             }
         }
-        for (String path : branchIndex.folderPaths(group, search.getText(), null))
-            if (visiblePaths.contains(path))
-                addFolderPath(root, branchIndex.folderParts(path), "", false, folderItems); //$NON-NLS-1$
-        for (Choice choice : choices)
-            addGrouped(root, choice, branchIndex.pathParts(choice.ref()), "", folderItems); //$NON-NLS-1$
+        return visiblePaths;
     }
 
-    private void addRemoteBranches(TreeItem root, String query)
+    private void addRemoteBranches(TreeItem root, String query, List<Choice> choices)
     {
+        Map<String, List<Choice>> byRemote = new HashMap<>();
+        for (Choice choice : choices)
+            byRemote.computeIfAbsent(branchIndex.remoteName(choice.ref()), key -> new ArrayList<>()).add(choice);
+        Set<String> visiblePaths = visibleFolderPaths(choices);
         for (String remoteName : branchIndex.remoteNames(query))
         {
-            List<Choice> remoteChoices = choices(branchIndex.filterRemote(query, remoteName));
+            List<Choice> remoteChoices = byRemote.get(remoteName);
+            if (remoteChoices == null)
+                continue;
             Map<String, TreeItem> folderItems = new HashMap<>();
             TreeItem remoteRoot = new TreeItem(root, SWT.NONE);
             remoteRoot.setText(pinnedFolders.contains(remoteName) ? "★ " + remoteName : remoteName); //$NON-NLS-1$
@@ -1228,6 +1260,8 @@ final class BranchPicker
             folderItems.put(remoteName, remoteRoot);
             for (String path : branchIndex.folderPaths(BranchPickerIndex.Group.REMOTE, query, remoteName))
             {
+                if (!visiblePaths.contains(path))
+                    continue;
                 List<String> parts = branchIndex.folderParts(path);
                 addFolderPath(remoteRoot, parts.subList(1, parts.size()), remoteName, true, folderItems);
             }
